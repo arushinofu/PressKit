@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ equipment.general_name }} - PressKit</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="scan-container">
+        <div class="scan-box">
+            <div style="text-align: center; margin-bottom: 20px;">
+                <h1>🎬 PressKit</h1>
+            </div>
+
+            <h2 style="color: var(--color-blue); margin-bottom: 10px;">{{ equipment.general_name }}</h2>
+            <p class="equipment-details">{{ equipment.specific_name }}</p>
+            <p class="equipment-number">Номер: <strong>{{ equipment.number }}</strong></p>
+
+            <div class="status-badge status-{{ equipment.status }}" style="font-size: 16px; margin: 20px 0;">
+                {% if equipment.status == 'available' %}
+                    ✅ Доступно
+                {% elif equipment.status == 'occupied' %}
+                    ⚠️ Занято ({{ equipment.current_user.full_name }})
+                {% else %}
+                    ❌ Сломано
+                {% endif %}
+            </div>
+
+            <div id="alert"></div>
+
+            <form id="actionForm" onsubmit="return false;">
+                <div class="form-group">
+                    <label for="userId">Выберите себя</label>
+                    <select id="userId" required>
+                        <option value="">-- Выберите пользователя --</option>
+                        {% for user in users %}
+                        <option value="{{ user.id }}">{{ user.full_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="pinCode">Введите ваш PIN-код</label>
+                    <input type="password" id="pinCode" maxlength="4" pattern="[0-9]{4}" required placeholder="4 цифры" inputmode="numeric">
+                </div>
+
+                <div class="action-buttons">
+                    {% if equipment.status == 'available' %}
+                    <button type="button" class="btn btn-success" onclick="takeEquipment()">
+                        📤 Взять
+                    </button>
+                    {% elif equipment.status == 'occupied' %}
+                    <button type="button" class="btn btn-warning" onclick="returnEquipment()">
+                        📥 Вернуть
+                    </button>
+                    {% else %}
+                    <div class="alert alert-error">
+                        ⚠️ Оборудование сломано. Обратитесь к администратору.
+                    </div>
+                    {% endif %}
+                </div>
+            </form>
+
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid var(--color-secondary); text-align: center;">
+                <p style="color: #999; font-size: 13px;">Забыли PIN-код? Обратитесь к администратору</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const equipmentId = {{ equipment.id }};
+
+        async function takeEquipment() {
+            const userId = document.getElementById('userId').value;
+            const pinCode = document.getElementById('pinCode').value;
+
+            if (!userId) {
+                showAlert('Выберите пользователя', 'error');
+                return;
+            }
+
+            if (!pinCode || pinCode.length !== 4) {
+                showAlert('Введите 4-значный PIN-код', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/scan/take', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        user_id: parseInt(userId),
+                        pin_code: pinCode,
+                        equipment_id: equipmentId
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    setTimeout(() => location.reload(), 2000);
+                } else {
+                    showAlert(data.message, 'error');
+                }
+            } catch (error) {
+                showAlert('Ошибка соединения с сервером', 'error');
+            }
+        }
+
+        async function returnEquipment() {
+            const userId = document.getElementById('userId').value;
+            const pinCode = document.getElementById('pinCode').value;
+
+            if (!userId) {
+                showAlert('Выберите пользователя', 'error');
+                return;
+            }
+
+            if (!pinCode || pinCode.length !== 4) {
+                showAlert('Введите 4-значный PIN-код', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/scan/return', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        user_id: parseInt(userId),
+                        pin_code: pinCode,
+                        equipment_id: equipmentId
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    setTimeout(() => location.reload(), 2000);
+                } else {
+                    showAlert(data.message, 'error');
+                }
+            } catch (error) {
+                showAlert('Ошибка соединения с сервером', 'error');
+            }
+        }
+
+        function showAlert(message, type) {
+            const alertDiv = document.getElementById('alert');
+            alertDiv.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
+            setTimeout(() => {
+                alertDiv.innerHTML = '';
+            }, 5000);
+        }
+
+        // Auto-focus PIN when user selected
+        document.getElementById('userId').addEventListener('change', function() {
+            if (this.value) {
+                document.getElementById('pinCode').focus();
+            }
+        });
+    </script>
+</body>
+</html>

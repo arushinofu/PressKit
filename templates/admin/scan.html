@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ equipment.general_name }} - PressKit</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="scan-container">
+        <div class="scan-box">
+            <h1>{{ equipment.general_name }}</h1>
+            <p class="equipment-details">{{ equipment.specific_name }}</p>
+            <p class="equipment-number">Номер: {{ equipment.number }}</p>
+
+            <div class="status-badge status-{{ equipment.status }}">
+                {% if equipment.status == 'available' %}
+                    Доступно
+                {% elif equipment.status == 'occupied' %}
+                    Занято ({{ equipment.current_user.full_name }})
+                {% else %}
+                    Сломано
+                {% endif %}
+            </div>
+
+            <form id="actionForm">
+                <div class="form-group">
+                    <label>Выберите пользователя</label>
+                    <select id="userId" required>
+                        <option value="">-- Выберите --</option>
+                        {% for user in users %}
+                        <option value="{{ user.id }}">{{ user.full_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>PIN-код</label>
+                    <input type="password" id="pinCode" maxlength="4" required>
+                </div>
+
+                <div class="action-buttons">
+                    {% if equipment.status == 'available' %}
+                    <button type="button" class="btn btn-success" onclick="takeEquipment()">
+                        Взять
+                    </button>
+                    {% elif equipment.status == 'occupied' %}
+                    <button type="button" class="btn btn-warning" onclick="returnEquipment()">
+                        Вернуть
+                    </button>
+                    {% else %}
+                    <p>Оборудование сломано. Обратитесь к администратору.</p>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const equipmentId = {{ equipment.id }};
+
+        async function takeEquipment() {
+            const userId = document.getElementById('userId').value;
+            const pinCode = document.getElementById('pinCode').value;
+
+            if (!userId || !pinCode) {
+                alert('Заполните все поля');
+                return;
+            }
+
+            const response = await fetch('/api/scan/take', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({user_id: userId, pin_code: pinCode, equipment_id: equipmentId})
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                alert(data.message);
+                location.reload();
+            } else {
+                alert(data.message);
+            }
+        }
+
+        async function returnEquipment() {
+            const userId = document.getElementById('userId').value;
+            const pinCode = document.getElementById('pinCode').value;
+
+            if (!userId || !pinCode) {
+                alert('Заполните все поля');
+                return;
+            }
+
+            const response = await fetch('/api/scan/return', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({user_id: userId, pin_code: pinCode, equipment_id: equipmentId})
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                alert(data.message);
+                location.reload();
+            } else {
+                alert(data.message);
+            }
+        }
+    </script>
+</body>
+</html>

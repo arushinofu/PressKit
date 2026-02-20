@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PressKit - Административная панель</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="dashboard">
+        <div class="header">
+            <h1>🎬 PressKit Admin</h1>
+            <button class="logout-btn" onclick="logout()">Выйти</button>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('users')">Пользователи</button>
+            <button class="tab" onclick="switchTab('equipment')">Оборудование</button>
+            <button class="tab" onclick="switchTab('packs')">Паки</button>
+            <button class="tab" onclick="switchTab('logs')">Команды</button>
+        </div>
+
+        <!-- Users Tab -->
+        <div class="tab-content active" id="usersTab">
+            <div class="section-header">
+                <h2>Пользователи</h2>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn-add" onclick="exportUsers()" style="background: var(--color-warning);">
+                        📥 Экспорт
+                    </button>
+                    <button class="btn-add" onclick="openImportModal('users')" style="background: var(--color-blue);">
+                        📤 Импорт
+                    </button>
+                    <button class="btn-add" onclick="openAddUserModal()">
+                        <span>+</span> Добавить пользователя
+                    </button>
+                </div>
+            </div>
+
+            <div class="search-filter">
+                <input type="text" id="userSearch" placeholder="Поиск по имени или Telegram...">
+            </div>
+
+            <div class="items-grid" id="usersGrid"></div>
+        </div>
+
+        <!-- Equipment Tab -->
+        <div class="tab-content" id="equipmentTab">
+            <div class="section-header">
+                <h2>Оборудование</h2>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn-add" onclick="exportEquipment()" style="background: var(--color-warning);">
+                        📥 Экспорт
+                    </button>
+                    <button class="btn-add" onclick="openImportModal('equipment')" style="background: var(--color-blue);">
+                        📤 Импорт
+                    </button>
+                    <button class="btn-add" onclick="openAddEquipmentModal()">
+                        <span>+</span> Добавить оборудование
+                    </button>
+                </div>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="number" id="availableCount">0</div>
+                    <div class="label">Доступно</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number" id="occupiedCount">0</div>
+                    <div class="label">Занято</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number" id="brokenCount">0</div>
+                    <div class="label">Сломано</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number" id="totalCount">0</div>
+                    <div class="label">Всего</div>
+                </div>
+            </div>
+
+            <div class="search-filter">
+                <input type="text" id="equipmentSearch" placeholder="Поиск оборудования...">
+                <select id="categoryFilter">
+                    <option value="">Все категории</option>
+                </select>
+                <select id="statusFilter">
+                    <option value="">Все статусы</option>
+                    <option value="available">Доступно</option>
+                    <option value="occupied">Занято</option>
+                    <option value="broken">Сломано</option>
+                </select>
+            </div>
+
+            <div class="items-grid" id="equipmentGrid"></div>
+        </div>
+
+        <!-- Packs Tab -->
+        <div class="tab-content" id="packsTab">
+            <div class="section-header">
+                <h2>Паки оборудования</h2>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn-add" onclick="exportPacks()" style="background: var(--color-warning);">
+                        📥 Экспорт
+                    </button>
+                    <button class="btn-add" onclick="openImportModal('packs')" style="background: var(--color-blue);">
+                        📤 Импорт
+                    </button>
+                    <button class="btn-add" onclick="openCreatePackModal()">
+                        <span>+</span> Создать пак
+                    </button>
+                </div>
+            </div>
+
+            <div class="items-grid" id="packsGrid"></div>
+        </div>
+
+        <!-- Logs Tab -->
+        <div class="tab-content" id="logsTab">
+            <div class="section-header">
+                <h2>Логи и команды</h2>
+                <button class="btn-add" onclick="exportLogs()">
+                    📊 Экспорт в CSV
+                </button>
+            </div>
+
+            <table class="logs-table">
+                <thead>
+                    <tr>
+                        <th>Время</th>
+                        <th>Пользователь</th>
+                        <th>Действие</th>
+                        <th>Оборудование</th>
+                        <th>Детали</th>
+                    </tr>
+                </thead>
+                <tbody id="logsTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Add/Edit User Modal -->
+    <div class="modal" id="userModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="userModalTitle">Добавить пользователя</h3>
+                <button class="close-modal" onclick="closeModal('userModal')">&times;</button>
+            </div>
+            <form id="userForm">
+                <div class="form-group">
+                    <label for="userFullName">ФИ</label>
+                    <input type="text" id="userFullName" required>
+                </div>
+                <div class="form-group">
+                    <label for="userTelegram">Telegram</label>
+                    <input type="text" id="userTelegram" placeholder="@username" required>
+                </div>
+                <div class="form-group">
+                    <label for="userPin">PIN-код (оставьте пустым для автогенерации)</label>
+                    <input type="text" id="userPin" pattern="[0-9]{4}" maxlength="4" placeholder="4 цифры">
+                </div>
+                <button type="submit" class="btn btn-primary">Сохранить</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Add/Edit Equipment Modal -->
+    <div class="modal" id="equipmentModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="equipmentModalTitle">Добавить оборудование</h3>
+                <button class="close-modal" onclick="closeModal('equipmentModal')">&times;</button>
+            </div>
+            <form id="equipmentForm">
+                <div class="form-group">
+                    <label for="equipmentCategory">Категория/Тип</label>
+                    <input type="text" id="equipmentCategory" required>
+                </div>
+                <div class="form-group">
+                    <label for="equipmentNumber">Номер</label>
+                    <input type="text" id="equipmentNumber" required>
+                </div>
+                <div class="form-group">
+                    <label for="equipmentGeneralName">Общее название</label>
+                    <input type="text" id="equipmentGeneralName" required>
+                </div>
+                <div class="form-group">
+                    <label for="equipmentSpecificName">Конкретное название</label>
+                    <input type="text" id="equipmentSpecificName" required>
+                </div>
+                <div class="form-group">
+                    <label for="equipmentStatus">Статус</label>
+                    <select id="equipmentStatus">
+                        <option value="available">Доступно</option>
+                        <option value="occupied">Занято</option>
+                        <option value="broken">Сломано</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary">Сохранить</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Create Pack Modal -->
+    <div class="modal" id="createPackModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Создать пак оборудования</h3>
+                <button class="close-modal" onclick="closeModal('createPackModal')">&times;</button>
+            </div>
+            <div class="form-group">
+                <label for="packName">Название пака (необязательно)</label>
+                <input type="text" id="packName" placeholder="Оставьте пустым для автоматического названия">
+            </div>
+            <p style="margin-bottom: 20px; color: #666;">Выберите минимум 2 предмета:</p>
+            <div id="packEquipmentList" style="max-height: 400px; overflow-y: auto;"></div>
+            <div style="margin-top: 20px;">
+                <button class="btn btn-primary" onclick="createPack()">Создать пак</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Details Modal -->
+    <div class="modal" id="userDetailsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="userDetailsTitle">Информация о пользователе</h3>
+                <button class="close-modal" onclick="closeModal('userDetailsModal')">&times;</button>
+            </div>
+            <div id="userDetailsContent"></div>
+        </div>
+    </div>
+
+    <!-- Import Modal -->
+    <div class="modal" id="importModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="importModalTitle">Импорт данных</h3>
+                <button class="close-modal" onclick="closeModal('importModal')">&times;</button>
+            </div>
+            <div id="importModalContent">
+                <div class="alert alert-warning" style="margin-bottom: 20px;">
+                    <strong>Формат файла:</strong> CSV с разделителем ";" и кодировкой UTF-8
+                </div>
+                <form id="importForm" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <label for="importFile">Выберите CSV файл</label>
+                        <input type="file" id="importFile" accept=".csv" required style="padding: 10px; border: 2px dashed var(--color-blue); border-radius: 8px; background: var(--color-primary); cursor: pointer; width: 100%;">
+                    </div>
+                    <div id="importPreview" style="max-height: 300px; overflow-y: auto; margin: 15px 0; padding: 10px; background: var(--color-primary); border-radius: 8px; display: none;">
+                        <!-- Preview will be shown here -->
+                    </div>
+                    <button type="submit" class="btn btn-primary">Импортировать</button>
+                </form>
+                <div id="importResults" style="margin-top: 20px; display: none;">
+                    <!-- Import results will be shown here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let editingUserId = null;
+        let editingEquipmentId = null;
+
+        // Load initial data
+        async function loadData() {
+            await Promise.all([
+                loadUsers(),
+                loadEquipment(),
+                loadPacks(),
+                loadLogs(),
+                loadCategories()
+            ]);
+            updateUI();
+        }
+
+        async function loadUsers() {
+            try {
+                const response = await fetch('/api/users');
+                window.users = await response.json();
+            } catch (e) {
+                console.error('Error loading users:', e);
+                window.users = [];
+            }
+        }
+
+        async function loadEquipment() {
+            try {
+                const search = document.getElementById('equipmentSearch')?.value || '';
+                const category = document.getElementById('categoryFilter')?.value || '';
+                const status = document.getElementById('statusFilter')?.value || '';
+
+                const params = new URLSearchParams();
+                if (search) params.append('search', search);
+                if (category) params.append('category', category);
+                if (status) params.append('status', status);
+
+                const response = await fetch('/api/equipment?' + params.toString());
+                window.equipment = await response.json();
+            } catch (e) {
+                console.error('Error loading equipment:', e);
+                window.equipment = [];
+            }
+        }
+
+        async function loadPacks() {
+            try {
+                const response = await fetch('/api/packs');
+                window.packs = await response.json();
+            } catch (e) {
+                console.error('Error loading packs:', e);
+                window.packs = [];
+            }
+        }
+
+        async function loadLogs() {
+            try {
+                const response = await fetch('/api/logs');
+                window.logs = await response.json();
+            } catch (e) {
+                console.error('Error loading logs:', e);
+                window.logs = [];
+            }
+        }
+
+        async function loadCategories() {
+            try {
+                const response = await fetch('/api/categories');
+                const cats = await response.json();
+                window.categories = cats.map(c => c.name);
+            } catch (e) {
+                console.error('Error loading categories:', e);
+                window.categories = [];
+            }
+        }
+
+        function logout() {
+            window.location.href = '/admin/logout';
+        }
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+            event.target.classList.add('active');
+            document.getElementById(tabName + 'Tab').classList.add('active');
+        }
+
+        // User management
+        function openAddUserModal() {
+            editingUserId = null;
+            document.getElementById('userModalTitle').textContent = 'Добавить пользователя';
+            document.getElementById('userForm').reset();
+            document.getElementById('userModal').classList.add('active');
+        }
+
+        function openEditUserModal(userId) {
+            editingUserId = userId;
+            const user = users.find(u => u.id === userId);
+            document.getElementById('userModalTitle').textContent = 'Редактировать пользователя';
+            document.getElementById('userFullName').value = user.full_name;
+            document.getElementById('userTelegram').value = user.telegram;
+            document.getElementById('userPin').value = user.pin_code;
+            document.getElementById('userModal').classList.add('active');
+        }
+
+        document.getElementById('userForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const data = {
+                full_name: document.getElementById('userFullName').value,
+                telegram: document.getElementById('userTelegram').value,
+                pin_code: document.getElementById('userPin').value
+            };
+
+            try {
+                if (editingUserId) {
+                    await fetch(`/api/users/${editingUserId}`, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(data)
+                    });
+                } else {
+                    const response = await fetch('/api/users', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(data)
+                    });
+                    const result = await response.json();
+                    alert(`Пользователь создан!\nПИН-код: ${result.user.pin_code}\n\nСохраните этот код!`);
+                }
+
+                closeModal('userModal');
+                await loadUsers();
+                await loadLogs();
+                updateUI();
+            } catch (e) {
+                alert('Ошибка: ' + e.message);
+            }
+        });
+
+        async function deleteUser(userId) {
+            if (!confirm('Удалить пользователя?')) return;
+
+            try {
+                await fetch(`/api/users/${userId}`, { method: 'DELETE' });
+                await loadUsers();
+                await loadLogs();
+                updateUI();
+            } catch (e) {
+                alert('Ошибка: ' + e.message);
+            }
+        }
+
+        async function viewUserDetails(userId) {
+            try {
+                const response = await fetch(`/api/users/${userId}/history`);
+                const data = await response.json();
+
+                let html = `
+                    <div style="margin-bottom: 20px;">
+                        <p><strong>ФИ:</strong> ${data.user.full_name}</p>
+                        <p><strong>Telegram:</strong> ${data.user.telegram}</p>
+                        <p><strong>PIN-код:</strong> ${data.user.pin_code}</p>
+                    </div>
+                    <h4 style="margin: 20px 0 10px 0; color: var(--color-blue);">Текущее оборудование (${data.current_equipment.length})</h4>
+                `;
+
+                if (data.current_equipment.length > 0) {
+                    data.current_equipment.forEach(eq => {
+                        html += `<div style="padding: 10px; background: var(--color-primary); border-radius: 6px; margin-bottom: 10px;">
+                            <strong>${eq.general_name}</strong> - ${eq.specific_name} (№${eq.number})
+                        </div>`;
+                    });
+                } else {
+                    html += '<p style="color: #999;">Нет активного оборудования</p>';
+                }
+
+                html += '<h4 style="margin: 20px 0 10px 0; color: var(--color-blue);">Последние действия</h4>';
+
+                if (data.logs.length > 0) {
+                    data.logs.forEach(log => {
+                        html += `<div style="padding: 8px; border-bottom: 1px solid var(--color-secondary); font-size: 13px;">
+                            <strong>${new Date(log.timestamp).toLocaleString('ru-RU')}</strong> - ${log.action}: ${log.details || ''}
+                        </div>`;
+                    });
+                } else {
+                    html += '<p style="color: #999;">Нет истории действий</p>';
+                }
+
+                document.getElementById('userDetailsTitle').textContent = `Пользователь: ${data.user.full_name}`;
+                document.getElementById('userDetailsContent').innerHTML = html;
+                document.getElementById('userDetailsModal').classList.add('active');
+            } catch (e) {
+                alert('Ошибка загрузки данных: ' + e.message);
+            }
+        }
+
+        // Equipment management
+        function openAddEquipmentModal() {
+            editingEquipmentId = null;
+            document.getElementById('equipmentModalTitle').textContent = 'Добавить оборудование';
+            document.getElementById('equipmentForm').reset();
+            document.getElementById('equipmentModal').classList.add('active');
+        }
+
+        function openEditEquipmentModal(equipmentId) {
+            editingEquipmentId = equipmentId;
+            const eq = equipment.find(e => e.id === equipmentId);
+            document.getElementById('equipmentModalTitle').textContent = 'Редактировать оборудование';
+            document.getElementById('equipmentCategory').value = eq.category;
+            document.getElementById('equipmentNumber').value = eq.number;
+            document.getElementById('equipmentGeneralName').value = eq.general_name;
+            document.getElementById('equipmentSpecificName').value = eq.specific_name;
+            document.getElementById('equipmentStatus').value = eq.status;
+            document.getElementById('equipmentModal').classList.add('active');
+        }
+
+        document.getElementById('equipmentForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const data = {
+                category: document.getElementById('equipmentCategory').value,
+                number: document.getElementById('equipmentNumber').value,
+                general_name: document.getElementById('equipmentGeneralName').value,
+                specific_name: document.getElementById('equipmentSpecificName').value,
+                status: document.getElementById('equipmentStatus').value
+            };
+
+            try {
+                let result;
+                if (editingEquipmentId) {
+                    const response = await fetch(`/api/equipment/${editingEquipmentId}`, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(data)
+                    });
+                    result = await response.json();
+                } else {
+                    const response = await fetch('/api/equipment', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(data)
+                    });
+                    result = await response.json();
+                    alert(`Оборудование создано!\nQR-код создан: QR-${data.number}\n\nСкачайте QR-код из папки static/qr_codes/`);
+                }
+
+                closeModal('equipmentModal');
+
+                await loadEquipment();
+                await loadCategories();
+                await loadLogs();
+                updateUI();
+            } catch (e) {
+                alert('Ошибка: ' + e.message);
+            }
+        });
+
+        async function deleteEquipment(equipmentId) {
+            if (!confirm('Удалить оборудование?')) return;
+
+            try {
+                await fetch(`/api/equipment/${equipmentId}`, { method: 'DELETE' });
+                await loadEquipment();
+                await loadLogs();
+                await loadCategories();
+                updateUI();
+            } catch (e) {
+                alert('Ошибка: ' + e.message);
+            }
+        }
+
+        // Pack management
+        async function openCreatePackModal() {
+            await loadEquipment();
+            const availableEquipment = equipment.filter(e => e.status === 'available');
+
+            if (availableEquipment.length < 2) {
+                alert('Недостаточно доступного оборудования для создания пака (нужно минимум 2)');
+                return;
+            }
+
+            const html = availableEquipment.map(eq => `
+                <div style="padding: 12px; background: var(--color-primary); border-radius: 8px; margin-bottom: 10px; display: flex; align-items: center; gap: 12px;">
+                    <input type="checkbox" id="pack_eq_${eq.id}" value="${eq.id}" style="width: 20px; height: 20px; cursor: pointer;">
+                    <label for="pack_eq_${eq.id}" style="flex: 1; cursor: pointer;">
+                        <strong>${eq.general_name}</strong> - ${eq.specific_name} (№${eq.number})
+                    </label>
+                </div>
+            `).join('');
+
+            document.getElementById('packEquipmentList').innerHTML = html;
+            document.getElementById('packName').value = '';
+            document.getElementById('createPackModal').classList.add('active');
+        }
+
+        async function createPack() {
+            const checkboxes = document.querySelectorAll('#packEquipmentList input[type="checkbox"]:checked');
+
+            if (checkboxes.length < 2) {
+                alert('Выберите минимум 2 предмета для создания пака');
+                return;
+            }
+
+            const equipmentIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
+            const packName = document.getElementById('packName').value;
+
+            try {
+                const response = await fetch('/api/packs', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        equipment_ids: equipmentIds,
+                        pack_name: packName
+                    })
+                });
+
+                const result = await response.json();
+                alert(`Пак создан!\nНазвание: ${result.pack.name}\nQR-код: ${result.pack.qr_code}\n\nСкачайте QR-код из папки static/qr_codes/`);
+
+                closeModal('createPackModal');
+                await loadPacks();
+                await loadLogs();
+                updateUI();
+            } catch (e) {
+                alert('Ошибка: ' + e.message);
+            }
+        }
+
+        async function deletePack(packId) {
+            if (!confirm('Удалить пак? Оборудование останется в системе.')) return;
+
+            try {
+                await fetch(`/api/packs/${packId}`, { method: 'DELETE' });
+                await loadPacks();
+                await loadLogs();
+                updateUI();
+            } catch (e) {
+                alert('Ошибка: ' + e.message);
+            }
+        }
+
+        // Rendering
+        function renderUsers() {
+            const grid = document.getElementById('usersGrid');
+
+            if (!users || users.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><h3>Нет пользователей</h3></div>';
+                return;
+            }
+
+            grid.innerHTML = users.map(user => `
+                <div class="item-card">
+                    <h3>${user.full_name}</h3>
+                    <p><strong>Telegram:</strong> ${user.telegram}</p>
+                    <p><strong>PIN:</strong> ${user.pin_code}</p>
+                    <div class="item-actions">
+                        <button class="btn-small btn-view" onclick="viewUserDetails(${user.id})">Подробнее</button>
+                        <button class="btn-small btn-edit" onclick="openEditUserModal(${user.id})">Изменить</button>
+                        <button class="btn-small btn-delete" onclick="deleteUser(${user.id})">Удалить</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderEquipment() {
+            const grid = document.getElementById('equipmentGrid');
+
+            if (!equipment || equipment.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><h3>Нет оборудования</h3></div>';
+                return;
+            }
+
+            grid.innerHTML = equipment.map(eq => {
+                const statusClass = `badge-${eq.status}`;
+                const statusText = {
+                    'available': 'Доступно',
+                    'occupied': 'Занято',
+                    'broken': 'Сломано'
+                }[eq.status];
+
+                let occupiedBy = '';
+                if (eq.status === 'occupied' && eq.current_user_name) {
+                    occupiedBy = ` (${eq.current_user_name})`;
+                }
+
+                return `
+                    <div class="item-card">
+                        <h3>${eq.general_name}</h3>
+                        <p><strong>№${eq.number}</strong></p>
+                        <p>${eq.specific_name}</p>
+                        <p><strong>Категория:</strong> ${eq.category || '-'}</p>
+                        <span class="badge ${statusClass}">${statusText}${occupiedBy}</span>
+                        <div class="item-actions">
+                            <button class="btn-small btn-edit" onclick="openEditEquipmentModal(${eq.id})">Изменить</button>
+                            <button class="btn-small btn-delete" onclick="deleteEquipment(${eq.id})">Удалить</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderPacks() {
+            const grid = document.getElementById('packsGrid');
+
+            if (!packs || packs.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><h3>Нет паков</h3></div>';
+                return;
+            }
+
+            grid.innerHTML = packs.map(pack => `
+                <div class="item-card">
+                    <h3>📦 ${pack.name}</h3>
+                    <p><strong>Предметов:</strong> ${pack.items_count}</p>
+                    ${pack.equipment.map(eq => `
+                        <div style="padding: 6px; background: white; border-radius: 4px; margin: 5px 0; font-size: 13px;">
+                            ${eq.general_name} №${eq.number}
+                            <span class="badge badge-${eq.status}" style="float: right; padding: 2px 8px; font-size: 11px;">
+                                ${eq.status === 'available' ? 'Доступно' : eq.status === 'occupied' ? 'Занято' : 'Сломано'}
+                            </span>
+                        </div>
+                    `).join('')}
+                    <div class="item-actions">
+                        <button class="btn-small btn-delete" onclick="deletePack(${pack.id})">Удалить пак</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderLogs() {
+            const tbody = document.getElementById('logsTableBody');
+
+            if (!logs || logs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">Нет логов</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = logs.slice(0, 100).map(log => `
+                <tr>
+                    <td>${new Date(log.timestamp).toLocaleString('ru-RU')}</td>
+                    <td>${log.user_name || '-'}</td>
+                    <td>${log.action}</td>
+                    <td>${log.equipment_name || '-'}</td>
+                    <td>${log.details || '-'}</td>
+                </tr>
+            `).join('');
+        }
+
+        function updateStats() {
+            if (!equipment) return;
+
+            const available = equipment.filter(e => e.status === 'available').length;
+            const occupied = equipment.filter(e => e.status === 'occupied').length;
+            const broken = equipment.filter(e => e.status === 'broken').length;
+
+            document.getElementById('availableCount').textContent = available;
+            document.getElementById('occupiedCount').textContent = occupied;
+            document.getElementById('brokenCount').textContent = broken;
+            document.getElementById('totalCount').textContent = equipment.length;
+        }
+
+         function updateCategoryFilter() {
+            if (!categories) return;
+
+            const select = document.getElementById('categoryFilter');
+            const currentValue = select.value; // Сохраняем текущее значение
+
+            select.innerHTML = '<option value="">Все категории</option>' +
+                categories.map(cat => `<option value="${cat}">${cat}</option>`).join('');
+
+            // Восстанавливаем выбранное значение ТОЛЬКО если оно существует
+            if (currentValue && categories.includes(currentValue)) {
+                select.value = currentValue;
+            } else {
+                select.value = ''; // Сбрасываем на "Все категории"
+            }
+        }
+
+
+        function updateUI() {
+            renderUsers();
+            renderEquipment();
+            renderPacks();
+            renderLogs();
+            updateStats();
+            updateCategoryFilter();
+        }
+
+        // Search with debounce
+        let searchTimeout;
+        document.getElementById('userSearch')?.addEventListener('input', function() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(async () => {
+                const search = this.value;
+                const response = await fetch(`/api/users?search=${encodeURIComponent(search)}`);
+                window.users = await response.json();
+                renderUsers();
+            }, 300);
+        });
+
+        document.getElementById('equipmentSearch')?.addEventListener('input', function() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => loadEquipment().then(updateUI), 300);
+        });
+
+        document.getElementById('categoryFilter')?.addEventListener('change', function() {
+            loadEquipment().then(() => {
+                renderEquipment();
+                updateStats();
+            });
+        });
+
+
+        document.getElementById('statusFilter')?.addEventListener('change', () => {
+            loadEquipment().then(updateUI);
+        });
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.remove('active');
+        }
+
+        async function exportLogs() {
+            window.location.href = '/api/logs/export';
+        }
+
+        // Export/Import functionality
+        let currentImportType = null;
+
+        async function exportUsers() {
+            window.location.href = '/api/users/export';
+        }
+
+        async function exportEquipment() {
+            window.location.href = '/api/equipment/export';
+        }
+
+        async function exportPacks() {
+            window.location.href = '/api/packs/export';
+        }
+
+        function openImportModal(type) {
+            currentImportType = type;
+            const titles = {
+                'users': 'Импорт пользователей',
+                'equipment': 'Импорт оборудования',
+                'packs': 'Импорт паков'
+            };
+
+            const formats = {
+                'users': 'ФИ; Телеграм; PIN-код',
+                'equipment': 'Категория; Номер; Общее название; Конкретное название; Статус',
+                'packs': 'Название пака; Номера оборудования (через запятую)'
+            };
+
+            document.getElementById('importModalTitle').textContent = titles[type];
+
+            const warning = document.querySelector('#importModal .alert-warning');
+            warning.innerHTML = `
+                <strong>Формат файла:</strong> CSV с разделителем ";" и кодировкой UTF-8<br>
+                <strong>Формат строк:</strong> ${formats[type]}
+            `;
+
+            document.getElementById('importForm').reset();
+            document.getElementById('importPreview').style.display = 'none';
+            document.getElementById('importResults').style.display = 'none';
+            document.getElementById('importModal').classList.add('active');
+        }
+
+        // Preview file before import
+        document.getElementById('importFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const content = event.target.result;
+                const lines = content.split('\n').filter(line => line.trim());
+
+                let preview = '<strong>Предпросмотр (первые 5 строк):</strong><br><br>';
+                preview += '<div style="font-family: monospace; font-size: 12px;">';
+                lines.slice(0, 6).forEach((line, index) => {
+                    const style = index === 0 ? 'font-weight: bold; color: var(--color-blue);' : '';
+                    preview += `<div style="${style}">${line}</div>`;
+                });
+                preview += '</div>';
+                preview += `<br><strong>Всего строк:</strong> ${lines.length - 1} (без заголовка)`;
+
+                document.getElementById('importPreview').innerHTML = preview;
+                document.getElementById('importPreview').style.display = 'block';
+            };
+            reader.readAsText(file);
+        });
+
+        // Handle import form submission
+        document.getElementById('importForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const fileInput = document.getElementById('importFile');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert('Выберите файл для импорта');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const endpoints = {
+                'users': '/api/users/import',
+                'equipment': '/api/equipment/import',
+                'packs': '/api/packs/import'
+            };
+
+            try {
+                const submitBtn = e.target.querySelector('button[type="submit"]');
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Импортируется...';
+
+                const response = await fetch(endpoints[currentImportType], {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                const resultsDiv = document.getElementById('importResults');
+
+                if (result.success) {
+                    let html = `
+                        <div class="alert alert-success">
+                            <strong>✓ Импорт завершён успешно!</strong><br>
+                            Импортировано: ${result.imported}
+                        </div>
+                    `;
+
+                    if (result.errors && result.errors.length > 0) {
+                        html += `
+                            <div class="alert alert-warning" style="margin-top: 10px;">
+                                <strong>⚠ Ошибки импорта (${result.errors.length}):</strong><br>
+                                <div style="max-height: 200px; overflow-y: auto; margin-top: 10px; font-size: 13px;">
+                                    ${result.errors.map(err => `<div>• ${err}</div>`).join('')}
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    resultsDiv.innerHTML = html;
+                    resultsDiv.style.display = 'block';
+
+                    // Reload page after 2 seconds
+                    setTimeout(() => {
+                        location.reload();
+                    }, 2000);
+                } else {
+                    resultsDiv.innerHTML = `
+                        <div class="alert alert-error">
+                            <strong>✗ Ошибка импорта</strong><br>
+                            ${result.message}
+                        </div>
+                    `;
+                    resultsDiv.style.display = 'block';
+                }
+
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Импортировать';
+
+            } catch (error) {
+                console.error('Import error:', error);
+                alert('Ошибка при импорте: ' + error.message);
+
+                const submitBtn = e.target.querySelector('button[type="submit"]');
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Импортировать';
+            }
+        });
+
+        // Initialize
+        loadData();
+
+        // Auto-refresh logs every 10 seconds
+        setInterval(() => {
+            if (document.getElementById('logsTab').classList.contains('active')) {
+                loadLogs().then(renderLogs);
+            }
+        }, 10000);
+    </script>
+</body>
+</html>

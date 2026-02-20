@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Пак {{ pack.name }} - PressKit</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="scan-container">
+        <div class="scan-box">
+            <div class="scan-header">
+                <h1>📦 Пак: {{ pack.name }}</h1>
+                <p>Состав: {{ pack_items|length }} предметов</p>
+            </div>
+
+            <div class="pack-items-list">
+                <h3>Состав пака:</h3>
+                {% for item in pack_items %}
+                <div class="pack-item">
+                    <strong>{{ item.general_name }}</strong><br>
+                    {{ item.specific_name }}<br>
+                    <small>№{{ item.number }}</small>
+                    <span class="badge badge-{{ item.status }}">
+                        {% if item.status == 'available' %}Доступно
+                        {% elif item.status == 'occupied' %}Занято
+                        {% else %}Сломано{% endif %}
+                    </span>
+                </div>
+                {% endfor %}
+            </div>
+
+            <div id="scanAlert"></div>
+
+            <!-- ИСПРАВЛЕНИЕ БАГА 8: Показываем правильные кнопки -->
+            {% if all_available %}
+                <!-- Все предметы доступны - показываем форму "Взять пак" -->
+                <form id="takePackForm">
+                    <div class="form-group">
+                        <label for="user">Выберите пользователя</label>
+                        <select id="user" required>
+                            <option value="">-- Выберите --</option>
+                            {% for user in users %}
+                            <option value="{{ user.id }}">{{ user.full_name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="pin">Введите PIN-код</label>
+                        <input type="password" id="pin" required pattern="[0-9]{4}" maxlength="4" placeholder="4 цифры">
+                    </div>
+                    <button type="submit" class="btn btn-primary">📤 Взять весь пак</button>
+                </form>
+            {% else %}
+                <!-- Проверяем, взяты ли все предметы одним пользователем -->
+                {% set first_user_id = pack_items[0].current_user_id if pack_items else none %}
+                {% set all_same_user = pack_items|selectattr('current_user_id', 'equalto', first_user_id)|list|length == pack_items|length %}
+
+                {% if all_same_user and first_user_id %}
+                    <!-- Все предметы взяты одним пользователем - показываем форму "Вернуть пак" -->
+                    <div class="info-message">
+                        <p>✓ Все предметы из пака взяты одним пользователем</p>
+                    </div>
+
+                    <form id="returnPackForm">
+                        <div class="form-group">
+                            <label for="returnUser">Выберите пользователя</label>
+                            <select id="returnUser" required>
+                                <option value="">-- Выберите --</option>
+                                {% for user in users %}
+                                <option value="{{ user.id }}">{{ user.full_name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="returnPin">Введите PIN-код</label>
+                            <input type="password" id="returnPin" required pattern="[0-9]{4}" maxlength="4" placeholder="4 цифры">
+                        </div>
+                        <button type="submit" class="btn btn-success">📥 Вернуть весь пак</button>
+                    </form>
+                {% else %}
+                    <!-- Предметы взяты разными пользователями или частично заняты -->
+                    <div class="warning-message">
+                        <p>⚠️ Некоторые предметы из пака недоступны или взяты разными пользователями</p>
+                        <p>Верните предметы по отдельности, отсканировав QR-код каждого предмета</p>
+                    </div>
+                {% endif %}
+            {% endif %}
+
+            <div style="margin-top: 20px; text-align: center;">
+                <a href="/" class="btn btn-secondary">← Назад</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Take pack form
+        document.getElementById('takePackForm')?.addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const userId = document.getElementById('user').value;
+            const pin = document.getElementById('pin').value;
+
+            try {
+                const response = await fetch('/api/scan/take-pack', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        user_id: parseInt(userId),
+                        pin_code: pin,
+                        pack_id: {{ pack.id }}
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 2000);
+                } else {
+                    showAlert(data.message, 'error');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showAlert('Ошибка соединения с сервером', 'error');
+            }
+        });
+
+        // Return pack form
+        document.getElementById('returnPackForm')?.addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const userId = document.getElementById('returnUser').value;
+            const pin = document.getElementById('returnPin').value;
+
+            try {
+                const response = await fetch('/api/scan/return-pack', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        user_id: parseInt(userId),
+                        pin_code: pin,
+                        pack_id: {{ pack.id }}
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 2000);
+                } else {
+                    showAlert(data.message, 'error');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showAlert('Ошибка соединения с сервером', 'error');
+            }
+        });
+
+        function showAlert(message, type) {
+            const alertDiv = document.getElementById('scanAlert');
+            alertDiv.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
+            setTimeout(() => {
+                if (type !== 'success') {
+                    alertDiv.innerHTML = '';
+                }
+            }, 5000);
+        }
+    </script>
+
+    <style>
+        .pack-items-list {
+            margin: 20px 0;
+            padding: 20px;
+            background: var(--color-primary);
+            border-radius: 10px;
+        }
+
+        .pack-items-list h3 {
+            margin-bottom: 15px;
+            color: var(--color-blue);
+        }
+
+        .pack-item {
+            padding: 12px;
+            background: white;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border: 2px solid var(--color-secondary);
+        }
+
+        .pack-item .badge {
+            float: right;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .info-message {
+            padding: 15px;
+            background: #d4edda;
+            border: 2px solid #28a745;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            color: #155724;
+        }
+
+        .warning-message {
+            padding: 15px;
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            color: #856404;
+        }
+
+        .warning-message p {
+            margin: 5px 0;
+        }
+
+        .btn-secondary {
+            background: var(--color-secondary);
+            color: var(--color-text);
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            text-decoration: none;
+            display: inline-block;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .btn-secondary:hover {
+            background: var(--color-blue);
+            color: white;
+        }
+
+        .btn-success {
+            background: var(--color-success);
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+        }
+    </style>
+</body>
+</html>

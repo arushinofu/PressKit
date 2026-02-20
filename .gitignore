@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.db
+instance/
+.DS_Store
+static/qr_codes/
+.idea
