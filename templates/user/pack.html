@@ -17,28 +17,56 @@
             <div class="pack-items-list">
                 <h3>Состав пака:</h3>
                 {% for item in pack_items %}
-                <div class="pack-item">
-                    <strong>{{ item.general_name }}</strong><br>
-                    {{ item.specific_name }}<br>
-                    <small>№{{ item.number }}</small>
-                    <span class="badge badge-{{ item.status }}">
-                        {% if item.status == 'available' %}Доступно
-                        {% elif item.status == 'occupied' %}Занято
-                        {% else %}Сломано{% endif %}
-                    </span>
+                <div class="pack-item {% if item.status == 'occupied' and item.return_date and item.return_date < now %}pack-item-overdue{% endif %}">
+                    <div class="pack-item-header">
+                        <div>
+                            <strong>{{ item.name }}</strong><br>
+                            <small>{{ item.description }} · №{{ item.number }}</small>
+                        </div>
+                        <span class="badge badge-{{ item.status }}">
+                            {% if item.status == 'available' %}Доступно
+                            {% elif item.status == 'occupied' %}Занято
+                            {% else %}Сломано{% endif %}
+                        </span>
+                    </div>
+                    {% if item.status == 'occupied' %}
+                        {% if item.current_guest %}
+                        <div class="holder-chip">Гость: {{ item.current_guest.full_name }} (гость)</div>
+                        {% elif item.current_user %}
+                        <div class="holder-chip">Пользователь: {{ item.current_user.full_name }}</div>
+                        {% endif %}
+                    {% endif %}
+                    {% if item.return_date %}
+                    <small class="{% if item.status == 'occupied' and item.return_date < now %}deadline-overdue{% endif %}">
+                        Возврат до: {{ item.return_date.strftime('%d.%m.%y %H:%M') }}
+                    </small>
+                    {% endif %}
                 </div>
                 {% endfor %}
             </div>
 
             <div id="scanAlert"></div>
 
-            <!-- ИСПРАВЛЕНИЕ БАГА 8: Показываем правильные кнопки -->
             {% if all_available %}
-                <!-- Все предметы доступны - показываем форму "Взять пак" -->
-                <form id="takePackForm">
+            <form onsubmit="return false;">
+                <div class="form-group">
+                    <label>Кто вы?</label>
+                    <div class="actor-switch">
+                        <label class="actor-option">
+                            <input type="radio" name="actorType" value="user" checked>
+                            <span>Пользователь</span>
+                        </label>
+                        <label class="actor-option">
+                            <input type="radio" name="actorType" value="guest">
+                            <span>Я гость</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div id="takeUserFields">
                     <div class="form-group">
-                        <label for="user">Выберите пользователя</label>
-                        <select id="user" required>
+                        <label for="takeUserId">Выберите пользователя</label>
+                        <select id="takeUserId" class="touch-target">
                             <option value="">-- Выберите --</option>
                             {% for user in users %}
                             <option value="{{ user.id }}">{{ user.full_name }}</option>
@@ -46,45 +74,108 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="pin">Введите PIN-код</label>
-                        <input type="password" id="pin" required pattern="[0-9]{4}" maxlength="4" placeholder="4 цифры">
+                        <label for="takePin">PIN-код</label>
+                        <input type="password" id="takePin" maxlength="4" placeholder="4 цифры" inputmode="numeric" class="touch-target">
                     </div>
-                    <button type="submit" class="btn btn-primary">📤 Взять весь пак</button>
-                </form>
-            {% else %}
-                <!-- Проверяем, взяты ли все предметы одним пользователем -->
-                {% set first_user_id = pack_items[0].current_user_id if pack_items else none %}
-                {% set all_same_user = pack_items|selectattr('current_user_id', 'equalto', first_user_id)|list|length == pack_items|length %}
+                </div>
 
-                {% if all_same_user and first_user_id %}
-                    <!-- Все предметы взяты одним пользователем - показываем форму "Вернуть пак" -->
-                    <div class="info-message">
-                        <p>✓ Все предметы из пака взяты одним пользователем</p>
+                <div id="takeGuestFields" style="display: none;">
+                    <div class="form-group">
+                        <label for="takeGuestMode">Профиль гостя</label>
+                        <select id="takeGuestMode" class="touch-target">
+                            <option value="existing" {% if guests|length == 0 %}disabled{% endif %} {% if guests|length > 0 %}selected{% endif %}>Выбрать из гостей</option>
+                            <option value="new" {% if guests|length == 0 %}selected{% endif %}>Новый гость</option>
+                        </select>
                     </div>
 
-                    <form id="returnPackForm">
+                    <div id="takeExistingGuestFields" {% if guests|length == 0 %}style="display: none;"{% endif %}>
                         <div class="form-group">
-                            <label for="returnUser">Выберите пользователя</label>
-                            <select id="returnUser" required>
-                                <option value="">-- Выберите --</option>
-                                {% for user in users %}
-                                <option value="{{ user.id }}">{{ user.full_name }}</option>
+                            <label for="takeExistingGuestId">Выберите гостя</label>
+                            <select id="takeExistingGuestId" class="touch-target">
+                                <option value="">-- Выберите гостя --</option>
+                                {% for guest in guests %}
+                                <option value="{{ guest.id }}">{{ guest.full_name }} ({{ guest.phone }})</option>
                                 {% endfor %}
                             </select>
                         </div>
-                        <div class="form-group">
-                            <label for="returnPin">Введите PIN-код</label>
-                            <input type="password" id="returnPin" required pattern="[0-9]{4}" maxlength="4" placeholder="4 цифры">
-                        </div>
-                        <button type="submit" class="btn btn-success">📥 Вернуть весь пак</button>
-                    </form>
-                {% else %}
-                    <!-- Предметы взяты разными пользователями или частично заняты -->
-                    <div class="warning-message">
-                        <p>⚠️ Некоторые предметы из пака недоступны или взяты разными пользователями</p>
-                        <p>Верните предметы по отдельности, отсканировав QR-код каждого предмета</p>
                     </div>
+
+                    <div id="takeNewGuestFields" {% if guests|length > 0 %}style="display: none;"{% endif %}>
+                        <div class="form-group">
+                            <label for="takeGuestFullName">ФИО гостя</label>
+                            <input type="text" id="takeGuestFullName" placeholder="Иванов Иван Иванович" class="touch-target">
+                        </div>
+                        <div class="form-group">
+                            <label for="takeGuestPhone">Телефон</label>
+                            <input type="text" id="takeGuestPhone" placeholder="7 (000) 000-00-00" inputmode="numeric" class="touch-target">
+                        </div>
+                        <div class="form-group">
+                            <label for="takeGuestTelegram">Telegram</label>
+                            <input type="text" id="takeGuestTelegram" placeholder="@username" class="touch-target">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="packReturnDate">Дата возврата</label>
+                    <input
+                        type="text"
+                        id="packReturnDate"
+                        required
+                        class="touch-target"
+                        placeholder="24.03.25 12:00"
+                        pattern="\d{2}\.\d{2}\.\d{2} \d{2}:\d{2}"
+                        inputmode="numeric"
+                    >
+                    <small style="color: #666;">Формат: ДД.ММ.ГГ ЧЧ:ММ</small>
+                </div>
+
+                <button type="button" class="btn btn-primary" onclick="takePack()">📤 Взять весь пак</button>
+            </form>
+            {% elif all_occupied_same_actor %}
+            <form onsubmit="return false;">
+                {% if occupied_actor_type == 'guest' %}
+                <div class="info-message">
+                    <p>✓ Весь пак взят гостем</p>
+                </div>
+                <div class="form-group">
+                    <label for="returnGuestId">Гость</label>
+                    <select id="returnGuestId" class="touch-target">
+                        <option value="">-- Выберите гостя --</option>
+                        {% for guest in guests %}
+                        <option value="{{ guest.id }}" {% if occupied_actor_id == guest.id %}selected{% endif %}>
+                            {{ guest.full_name }} ({{ guest.phone }})
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% else %}
+                <div class="info-message">
+                    <p>✓ Весь пак взят пользователем</p>
+                </div>
+                <div class="form-group">
+                    <label for="returnUserId">Пользователь</label>
+                    <select id="returnUserId" class="touch-target">
+                        <option value="">-- Выберите пользователя --</option>
+                        {% for user in users %}
+                        <option value="{{ user.id }}" {% if occupied_actor_id == user.id %}selected{% endif %}>
+                            {{ user.full_name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="returnPin">PIN-код</label>
+                    <input type="password" id="returnPin" maxlength="4" placeholder="4 цифры" inputmode="numeric" class="touch-target">
+                </div>
                 {% endif %}
+                <button type="button" class="btn btn-success" onclick="returnPack()">📥 Вернуть весь пак</button>
+            </form>
+            {% else %}
+            <div class="warning-message">
+                <p>⚠️ Пак нельзя вернуть целиком: предметы заняты частично или разными людьми.</p>
+                <p>Верните оборудование по отдельности через QR каждого предмета.</p>
+            </div>
             {% endif %}
 
             <div style="margin-top: 20px; text-align: center;">
@@ -94,73 +185,275 @@
     </div>
 
     <script>
-        // Take pack form
-        document.getElementById('takePackForm')?.addEventListener('submit', async function(e) {
-            e.preventDefault();
+        const PACK_ID = {{ pack.id }};
+        const ALL_AVAILABLE = {{ 'true' if all_available else 'false' }};
+        const OCCUPIED_ACTOR_TYPE = '{{ occupied_actor_type or "" }}';
+        const RETURN_DATE_REGEX = /^\d{2}\.\d{2}\.\d{2} \d{2}:\d{2}$/;
 
-            const userId = document.getElementById('user').value;
-            const pin = document.getElementById('pin').value;
+        function formatReturnDateMask(rawValue) {
+            const digits = rawValue.replace(/\D/g, '').slice(0, 10);
+            const parts = [
+                digits.slice(0, 2),
+                digits.slice(2, 4),
+                digits.slice(4, 6),
+                digits.slice(6, 8),
+                digits.slice(8, 10)
+            ];
+
+            let result = '';
+            if (parts[0]) result += parts[0];
+            if (parts[1]) result += `.${parts[1]}`;
+            if (parts[2]) result += `.${parts[2]}`;
+            if (parts[3]) result += ` ${parts[3]}`;
+            if (parts[4]) result += `:${parts[4]}`;
+            return result;
+        }
+
+        function formatPhoneMask(rawValue) {
+            const digits = rawValue.replace(/\D/g, '').slice(0, 11);
+            let result = '';
+
+            if (digits.length > 0) result = digits.slice(0, 1);
+            if (digits.length > 1) result += ` (${digits.slice(1, 4)}`;
+            if (digits.length >= 4) result += ')';
+            if (digits.length > 4) result += ` ${digits.slice(4, 7)}`;
+            if (digits.length > 7) result += `-${digits.slice(7, 9)}`;
+            if (digits.length > 9) result += `-${digits.slice(9, 11)}`;
+
+            return result;
+        }
+
+        function normalizePhone(rawValue) {
+            const digits = (rawValue || '').replace(/\D/g, '');
+            if (digits.length !== 11 || !/^[78]/.test(digits)) {
+                return null;
+            }
+
+            const normalized = `7${digits.slice(1)}`;
+            return `7 (${normalized.slice(1, 4)}) ${normalized.slice(4, 7)}-${normalized.slice(7, 9)}-${normalized.slice(9, 11)}`;
+        }
+
+        function setupDigitsOnlyMask(inputId, formatter, maxDigits) {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+
+            input.addEventListener('keydown', function(event) {
+                const allowedKeys = ['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End'];
+                if (allowedKeys.includes(event.key) || event.ctrlKey || event.metaKey) {
+                    return;
+                }
+
+                if (!/^\d$/.test(event.key)) {
+                    event.preventDefault();
+                    return;
+                }
+
+                const selectionLength = (this.selectionEnd || 0) - (this.selectionStart || 0);
+                const digitsCount = this.value.replace(/\D/g, '').length;
+                if (digitsCount - selectionLength >= maxDigits) {
+                    event.preventDefault();
+                }
+            });
+
+            input.addEventListener('input', function() {
+                this.value = formatter(this.value);
+            });
+        }
+
+        function parseReturnDate(value) {
+            const match = value.match(/^(\d{2})\.(\d{2})\.(\d{2}) (\d{2}):(\d{2})$/);
+            if (!match) {
+                return null;
+            }
+
+            const [, day, month, year, hour, minute] = match;
+            const parsed = new Date(
+                Number(`20${year}`),
+                Number(month) - 1,
+                Number(day),
+                Number(hour),
+                Number(minute)
+            );
+
+            if (
+                parsed.getFullYear() !== Number(`20${year}`) ||
+                parsed.getMonth() !== Number(month) - 1 ||
+                parsed.getDate() !== Number(day)
+            ) {
+                return null;
+            }
+
+            return parsed;
+        }
+
+        function validateReturnDate(returnDate) {
+            if (!RETURN_DATE_REGEX.test(returnDate)) {
+                showAlert('Укажите дату возврата в формате ДД.ММ.ГГ ЧЧ:ММ', 'error');
+                return false;
+            }
+
+            const parsedReturnDate = parseReturnDate(returnDate);
+            if (!parsedReturnDate) {
+                showAlert('Проверьте корректность даты возврата', 'error');
+                return false;
+            }
+
+            if (parsedReturnDate <= new Date()) {
+                showAlert('Дата возврата должна быть в будущем', 'error');
+                return false;
+            }
+
+            return true;
+        }
+
+        function updateActorTypeUI() {
+            const actorType = document.querySelector('input[name="actorType"]:checked')?.value || 'user';
+            const userFields = document.getElementById('takeUserFields');
+            const guestFields = document.getElementById('takeGuestFields');
+
+            if (!userFields || !guestFields) return;
+            userFields.style.display = actorType === 'user' ? 'block' : 'none';
+            guestFields.style.display = actorType === 'guest' ? 'block' : 'none';
+            if (actorType === 'guest') {
+                updateGuestModeUI();
+            }
+        }
+
+        function updateGuestModeUI() {
+            const mode = document.getElementById('takeGuestMode')?.value || 'existing';
+            const existingGuestFields = document.getElementById('takeExistingGuestFields');
+            const newGuestFields = document.getElementById('takeNewGuestFields');
+
+            if (!existingGuestFields || !newGuestFields) return;
+            existingGuestFields.style.display = mode === 'existing' ? 'block' : 'none';
+            newGuestFields.style.display = mode === 'new' ? 'block' : 'none';
+        }
+
+        async function takePack() {
+            const returnDate = document.getElementById('packReturnDate')?.value.trim() || '';
+            if (!validateReturnDate(returnDate)) {
+                return;
+            }
+
+            const actorType = document.querySelector('input[name="actorType"]:checked')?.value || 'user';
+            const payload = {
+                pack_id: PACK_ID,
+                return_date: returnDate,
+                actor_type: actorType
+            };
+
+            if (actorType === 'guest') {
+                const guestMode = document.getElementById('takeGuestMode')?.value || 'existing';
+                if (guestMode === 'existing') {
+                    const existingGuestId = document.getElementById('takeExistingGuestId')?.value || '';
+                    if (!existingGuestId) {
+                        showAlert('Выберите гостя из списка', 'error');
+                        return;
+                    }
+                    payload.guest_id = parseInt(existingGuestId, 10);
+                } else {
+                    const fullName = document.getElementById('takeGuestFullName')?.value.trim() || '';
+                    const phone = document.getElementById('takeGuestPhone')?.value.trim() || '';
+                    const telegram = document.getElementById('takeGuestTelegram')?.value.trim() || '';
+                    const normalizedPhone = normalizePhone(phone);
+
+                    if (!fullName || !phone || !telegram) {
+                        showAlert('Заполните все поля гостя', 'error');
+                        return;
+                    }
+
+                    if (!normalizedPhone) {
+                        showAlert('Неверный формат телефона: 7 (XXX) XXX-XX-XX', 'error');
+                        return;
+                    }
+
+                    payload.guest_full_name = fullName;
+                    payload.guest_phone = normalizedPhone;
+                    payload.guest_telegram = telegram;
+                }
+            } else {
+                const userId = document.getElementById('takeUserId')?.value || '';
+                const pinCode = document.getElementById('takePin')?.value || '';
+
+                if (!userId) {
+                    showAlert('Выберите пользователя', 'error');
+                    return;
+                }
+
+                if (!pinCode || pinCode.length !== 4) {
+                    showAlert('Введите 4-значный PIN-код', 'error');
+                    return;
+                }
+
+                payload.user_id = parseInt(userId, 10);
+                payload.pin_code = pinCode;
+            }
 
             try {
                 const response = await fetch('/api/scan/take-pack', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        user_id: parseInt(userId),
-                        pin_code: pin,
-                        pack_id: {{ pack.id }}
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 const data = await response.json();
-
                 if (data.success) {
                     showAlert(data.message, 'success');
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 2000);
+                    setTimeout(() => window.location.reload(), 1500);
                 } else {
                     showAlert(data.message, 'error');
                 }
             } catch (error) {
-                console.error('Error:', error);
                 showAlert('Ошибка соединения с сервером', 'error');
             }
-        });
+        }
 
-        // Return pack form
-        document.getElementById('returnPackForm')?.addEventListener('submit', async function(e) {
-            e.preventDefault();
+        async function returnPack() {
+            const payload = { pack_id: PACK_ID };
 
-            const userId = document.getElementById('returnUser').value;
-            const pin = document.getElementById('returnPin').value;
+            if (OCCUPIED_ACTOR_TYPE === 'guest') {
+                const guestId = document.getElementById('returnGuestId')?.value || '';
+                if (!guestId) {
+                    showAlert('Выберите гостя', 'error');
+                    return;
+                }
+                payload.guest_id = parseInt(guestId, 10);
+            } else {
+                const userId = document.getElementById('returnUserId')?.value || '';
+                const pinCode = document.getElementById('returnPin')?.value || '';
+
+                if (!userId) {
+                    showAlert('Выберите пользователя', 'error');
+                    return;
+                }
+
+                if (!pinCode || pinCode.length !== 4) {
+                    showAlert('Введите 4-значный PIN-код', 'error');
+                    return;
+                }
+
+                payload.user_id = parseInt(userId, 10);
+                payload.pin_code = pinCode;
+            }
 
             try {
                 const response = await fetch('/api/scan/return-pack', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        user_id: parseInt(userId),
-                        pin_code: pin,
-                        pack_id: {{ pack.id }}
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 const data = await response.json();
-
                 if (data.success) {
                     showAlert(data.message, 'success');
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 2000);
+                    setTimeout(() => window.location.reload(), 1500);
                 } else {
                     showAlert(data.message, 'error');
                 }
             } catch (error) {
-                console.error('Error:', error);
                 showAlert('Ошибка соединения с сервером', 'error');
             }
-        });
+        }
 
         function showAlert(message, type) {
             const alertDiv = document.getElementById('scanAlert');
@@ -171,6 +464,17 @@
                 }
             }, 5000);
         }
+
+        if (ALL_AVAILABLE) {
+            document.querySelectorAll('input[name="actorType"]').forEach((radio) => {
+                radio.addEventListener('change', updateActorTypeUI);
+            });
+            document.getElementById('takeGuestMode')?.addEventListener('change', updateGuestModeUI);
+            updateActorTypeUI();
+        }
+
+        setupDigitsOnlyMask('packReturnDate', formatReturnDateMask, 10);
+        setupDigitsOnlyMask('takeGuestPhone', formatPhoneMask, 11);
     </script>
 
     <style>
@@ -194,12 +498,68 @@
             border: 2px solid var(--color-secondary);
         }
 
+        .pack-item-overdue {
+            border-color: #dc3545;
+            background: #fff1f2;
+        }
+
+        .pack-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 6px;
+        }
+
+        .holder-chip {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: #f4f4f4;
+            border: 1px solid #ddd;
+            font-size: 12px;
+            margin-bottom: 6px;
+        }
+
+        .deadline-overdue {
+            color: #dc3545;
+            font-weight: 700;
+        }
+
         .pack-item .badge {
-            float: right;
             padding: 4px 10px;
             border-radius: 12px;
             font-size: 12px;
             font-weight: 600;
+        }
+
+        .actor-switch {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .actor-option {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 48px;
+            padding: 0 12px;
+            border-radius: 10px;
+            border: 1px solid var(--color-secondary);
+            background: #fff;
+            cursor: pointer;
+            font-weight: 600;
+            width: 100%;
+        }
+
+        .actor-option span {
+            white-space: nowrap;
+        }
+
+        .actor-option input {
+            margin: 0;
         }
 
         .info-message {

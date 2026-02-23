@@ -5,7 +5,7 @@ from config import Config
 
 
 def create_backup():
-    """Создание резервной копии базы данных"""
+    """Создаёт резервную копию базы данных."""
     try:
         db_path = os.path.join(Config.BASE_DIR, 'presskit.db')
         if not os.path.exists(db_path):
@@ -28,7 +28,7 @@ def create_backup():
 
 
 def cleanup_old_backups(keep_count=10):
-    """Удаление старых резервных копий"""
+    """Удаляет старые файлы резервных копий."""
     try:
         backup_files = []
         for filename in os.listdir(Config.BACKUPS_FOLDER):

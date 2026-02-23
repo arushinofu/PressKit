@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ equipment.general_name }} - PressKit</title>
+    <title>{{ equipment.name }} - PressKit</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
@@ -13,15 +13,30 @@
                 <h1>🎬 PressKit</h1>
             </div>
 
-            <h2 style="color: var(--color-blue); margin-bottom: 10px;">{{ equipment.general_name }}</h2>
-            <p class="equipment-details">{{ equipment.specific_name }}</p>
+            <h2 style="color: var(--color-blue); margin-bottom: 10px;">{{ equipment.name }}</h2>
+            <p class="equipment-details">{{ equipment.description }}</p>
             <p class="equipment-number">Номер: <strong>{{ equipment.number }}</strong></p>
+            {% if equipment.return_date %}
+            <p class="equipment-deadline {% if equipment.status == 'occupied' and equipment.return_date < now %}equipment-deadline-overdue{% endif %}">
+                Возврат до: <strong>{{ equipment.return_date.strftime('%d.%m.%y %H:%M') }}</strong>
+            </p>
+            {% endif %}
 
             <div class="status-badge status-{{ equipment.status }}" style="font-size: 16px; margin: 20px 0;">
                 {% if equipment.status == 'available' %}
                     ✅ Доступно
                 {% elif equipment.status == 'occupied' %}
-                    ⚠️ Занято ({{ equipment.current_user.full_name }})
+                    {% if equipment.current_guest %}
+                        ⚠️ Занято ({{ equipment.current_guest.full_name }} (гость))
+                    {% else %}
+                        ⚠️ Занято ({{ equipment.current_user.full_name }})
+                    {% endif %}
+                    {% if equipment.return_date %}
+                        <br><small>Вернуть до {{ equipment.return_date.strftime('%d.%m.%y %H:%M') }}</small>
+                    {% endif %}
+                    {% if equipment.return_date and equipment.return_date < now %}
+                        <br><small>⛔ Дедлайн потерян</small>
+                    {% endif %}
                 {% else %}
                     ❌ Сломано
                 {% endif %}
@@ -30,36 +45,136 @@
             <div id="alert"></div>
 
             <form id="actionForm" onsubmit="return false;">
-                <div class="form-group">
-                    <label for="userId">Выберите себя</label>
-                    <select id="userId" required>
-                        <option value="">-- Выберите пользователя --</option>
-                        {% for user in users %}
-                        <option value="{{ user.id }}">{{ user.full_name }}</option>
-                        {% endfor %}
-                    </select>
+                {% if equipment.status == 'available' %}
+                <div class="form-group" style="margin-bottom: 14px;">
+                    <label>Кто вы?</label>
+                    <div class="actor-switch">
+                        <label class="actor-option">
+                            <input type="radio" name="actorType" value="user" checked>
+                            <span>Пользователь</span>
+                        </label>
+                        <label class="actor-option">
+                            <input type="radio" name="actorType" value="guest">
+                            <span>Я гость</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div id="userFields">
+                    <div class="form-group">
+                        <label for="userId">Выберите себя</label>
+                        <select id="userId" class="touch-target">
+                            <option value="">-- Выберите пользователя --</option>
+                            {% for user in users %}
+                            <option value="{{ user.id }}">{{ user.full_name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="pinCode">Введите ваш PIN-код</label>
+                        <input type="password" id="pinCode" maxlength="4" pattern="[0-9]{4}" placeholder="4 цифры" inputmode="numeric" class="touch-target">
+                    </div>
+                </div>
+
+                <div id="guestFields" style="display: none;">
+                    <div class="form-group">
+                        <label for="guestMode">Профиль гостя</label>
+                        <select id="guestMode" class="touch-target">
+                            <option value="existing" {% if guests|length == 0 %}disabled{% endif %} {% if guests|length > 0 %}selected{% endif %}>Выбрать из гостей</option>
+                            <option value="new" {% if guests|length == 0 %}selected{% endif %}>Новый гость</option>
+                        </select>
+                    </div>
+
+                    <div id="existingGuestFields" {% if guests|length == 0 %}style="display: none;"{% endif %}>
+                        <div class="form-group">
+                            <label for="existingGuestId">Выберите гостя</label>
+                            <select id="existingGuestId" class="touch-target">
+                                <option value="">-- Выберите гостя --</option>
+                                {% for guest in guests %}
+                                <option value="{{ guest.id }}">{{ guest.full_name }} ({{ guest.phone }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="newGuestFields" {% if guests|length > 0 %}style="display: none;"{% endif %}>
+                        <div class="form-group">
+                            <label for="guestFullName">ФИО гостя</label>
+                            <input type="text" id="guestFullName" placeholder="Иванов Иван Иванович" class="touch-target">
+                        </div>
+                        <div class="form-group">
+                            <label for="guestPhone">Телефон</label>
+                            <input type="text" id="guestPhone" placeholder="7 (000) 000-00-00" inputmode="numeric" class="touch-target">
+                        </div>
+                        <div class="form-group">
+                            <label for="guestTelegram">Telegram</label>
+                            <input type="text" id="guestTelegram" placeholder="@username" class="touch-target">
+                        </div>
+                    </div>
                 </div>
 
                 <div class="form-group">
-                    <label for="pinCode">Введите ваш PIN-код</label>
-                    <input type="password" id="pinCode" maxlength="4" pattern="[0-9]{4}" required placeholder="4 цифры" inputmode="numeric">
+                    <label for="returnDate">Дата возврата</label>
+                    <input
+                        type="text"
+                        id="returnDate"
+                        required
+                        class="touch-target"
+                        placeholder="24.03.25 12:00"
+                        pattern="\d{2}\.\d{2}\.\d{2} \d{2}:\d{2}"
+                        inputmode="numeric"
+                    >
+                    <small style="color: #666;">Формат: ДД.ММ.ГГ ЧЧ:ММ</small>
                 </div>
 
                 <div class="action-buttons">
-                    {% if equipment.status == 'available' %}
                     <button type="button" class="btn btn-success" onclick="takeEquipment()">
                         📤 Взять
                     </button>
-                    {% elif equipment.status == 'occupied' %}
-                    <button type="button" class="btn btn-warning" onclick="returnEquipment()">
-                        📥 Вернуть
-                    </button>
+                </div>
+                {% elif equipment.status == 'occupied' %}
+                    {% if equipment.current_guest_id %}
+                    <div id="guestReturnFields">
+                        <div class="form-group">
+                            <label for="guestId">Выберите гостя</label>
+                            <select id="guestId" class="touch-target">
+                                <option value="">-- Выберите гостя --</option>
+                                {% for guest in guests %}
+                                <option value="{{ guest.id }}" {% if equipment.current_guest_id == guest.id %}selected{% endif %}>{{ guest.full_name }} ({{ guest.phone }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
                     {% else %}
+                    <div id="userReturnFields">
+                        <div class="form-group">
+                            <label for="userId">Выберите себя</label>
+                            <select id="userId" class="touch-target">
+                                <option value="">-- Выберите пользователя --</option>
+                                {% for user in users %}
+                                <option value="{{ user.id }}" {% if equipment.current_user_id == user.id %}selected{% endif %}>{{ user.full_name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="pinCode">Введите ваш PIN-код</label>
+                            <input type="password" id="pinCode" maxlength="4" pattern="[0-9]{4}" placeholder="4 цифры" inputmode="numeric" class="touch-target">
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <div class="action-buttons">
+                        <button type="button" class="btn btn-warning" onclick="returnEquipment()">
+                            📥 Вернуть
+                        </button>
+                    </div>
+                {% else %}
                     <div class="alert alert-error">
                         ⚠️ Оборудование сломано. Обратитесь к администратору.
                     </div>
-                    {% endif %}
-                </div>
+                {% endif %}
             </form>
 
             <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid var(--color-secondary); text-align: center;">
@@ -70,37 +185,221 @@
 
     <script>
         const equipmentId = {{ equipment.id }};
+        const EQUIPMENT_STATUS = '{{ equipment.status }}';
+        const IS_OCCUPIED_BY_GUEST = {{ 'true' if equipment.status == 'occupied' and equipment.current_guest_id else 'false' }};
+        const RETURN_DATE_REGEX = /^\d{2}\.\d{2}\.\d{2} \d{2}:\d{2}$/;
+
+        function formatReturnDateMask(rawValue) {
+            const digits = rawValue.replace(/\D/g, '').slice(0, 10);
+            const parts = [
+                digits.slice(0, 2),
+                digits.slice(2, 4),
+                digits.slice(4, 6),
+                digits.slice(6, 8),
+                digits.slice(8, 10)
+            ];
+
+            let result = '';
+            if (parts[0]) result += parts[0];
+            if (parts[1]) result += `.${parts[1]}`;
+            if (parts[2]) result += `.${parts[2]}`;
+            if (parts[3]) result += ` ${parts[3]}`;
+            if (parts[4]) result += `:${parts[4]}`;
+            return result;
+        }
+
+        function formatPhoneMask(rawValue) {
+            const digits = rawValue.replace(/\D/g, '').slice(0, 11);
+            let result = '';
+
+            if (digits.length > 0) result = digits.slice(0, 1);
+            if (digits.length > 1) result += ` (${digits.slice(1, 4)}`;
+            if (digits.length >= 4) result += ')';
+            if (digits.length > 4) result += ` ${digits.slice(4, 7)}`;
+            if (digits.length > 7) result += `-${digits.slice(7, 9)}`;
+            if (digits.length > 9) result += `-${digits.slice(9, 11)}`;
+
+            return result;
+        }
+
+        function normalizePhone(rawValue) {
+            const digits = (rawValue || '').replace(/\D/g, '');
+            if (digits.length !== 11 || !/^[78]/.test(digits)) {
+                return null;
+            }
+
+            const normalized = `7${digits.slice(1)}`;
+            return `7 (${normalized.slice(1, 4)}) ${normalized.slice(4, 7)}-${normalized.slice(7, 9)}-${normalized.slice(9, 11)}`;
+        }
+
+        function setupDigitsOnlyMask(inputId, formatter, maxDigits) {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+
+            input.addEventListener('keydown', function(event) {
+                const allowedKeys = ['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End'];
+                if (allowedKeys.includes(event.key) || event.ctrlKey || event.metaKey) {
+                    return;
+                }
+
+                if (!/^\d$/.test(event.key)) {
+                    event.preventDefault();
+                    return;
+                }
+
+                const selectionLength = (this.selectionEnd || 0) - (this.selectionStart || 0);
+                const digitsCount = this.value.replace(/\D/g, '').length;
+                if (digitsCount - selectionLength >= maxDigits) {
+                    event.preventDefault();
+                }
+            });
+
+            input.addEventListener('input', function() {
+                this.value = formatter(this.value);
+            });
+        }
+
+        function parseReturnDate(value) {
+            const match = value.match(/^(\d{2})\.(\d{2})\.(\d{2}) (\d{2}):(\d{2})$/);
+            if (!match) {
+                return null;
+            }
+
+            const [, day, month, year, hour, minute] = match;
+            const parsed = new Date(
+                Number(`20${year}`),
+                Number(month) - 1,
+                Number(day),
+                Number(hour),
+                Number(minute)
+            );
+
+            if (
+                parsed.getFullYear() !== Number(`20${year}`) ||
+                parsed.getMonth() !== Number(month) - 1 ||
+                parsed.getDate() !== Number(day)
+            ) {
+                return null;
+            }
+
+            return parsed;
+        }
+
+        function validateReturnDate(returnDate) {
+            if (!RETURN_DATE_REGEX.test(returnDate)) {
+                showAlert('Укажите дату возврата в формате ДД.ММ.ГГ ЧЧ:ММ', 'error');
+                return false;
+            }
+
+            const parsedReturnDate = parseReturnDate(returnDate);
+            if (!parsedReturnDate) {
+                showAlert('Проверьте корректность даты возврата', 'error');
+                return false;
+            }
+
+            if (parsedReturnDate <= new Date()) {
+                showAlert('Дата возврата должна быть в будущем', 'error');
+                return false;
+            }
+
+            return true;
+        }
+
+        function updateActorTypeUI() {
+            const actorType = document.querySelector('input[name="actorType"]:checked')?.value || 'user';
+            const userFields = document.getElementById('userFields');
+            const guestFields = document.getElementById('guestFields');
+
+            if (!userFields || !guestFields) return;
+            userFields.style.display = actorType === 'user' ? 'block' : 'none';
+            guestFields.style.display = actorType === 'guest' ? 'block' : 'none';
+            if (actorType === 'guest') {
+                updateGuestModeUI();
+            }
+        }
+
+        function updateGuestModeUI() {
+            const mode = document.getElementById('guestMode')?.value || 'existing';
+            const existingGuestFields = document.getElementById('existingGuestFields');
+            const newGuestFields = document.getElementById('newGuestFields');
+
+            if (!existingGuestFields || !newGuestFields) return;
+            existingGuestFields.style.display = mode === 'existing' ? 'block' : 'none';
+            newGuestFields.style.display = mode === 'new' ? 'block' : 'none';
+        }
 
         async function takeEquipment() {
-            const userId = document.getElementById('userId').value;
-            const pinCode = document.getElementById('pinCode').value;
-
-            if (!userId) {
-                showAlert('Выберите пользователя', 'error');
+            const returnDate = document.getElementById('returnDate')?.value.trim() || '';
+            if (!validateReturnDate(returnDate)) {
                 return;
             }
 
-            if (!pinCode || pinCode.length !== 4) {
-                showAlert('Введите 4-значный PIN-код', 'error');
-                return;
+            const actorType = document.querySelector('input[name="actorType"]:checked')?.value || 'user';
+            const payload = {
+                equipment_id: equipmentId,
+                return_date: returnDate,
+                actor_type: actorType
+            };
+
+            if (actorType === 'guest') {
+                const guestMode = document.getElementById('guestMode')?.value || 'existing';
+                if (guestMode === 'existing') {
+                    const existingGuestId = document.getElementById('existingGuestId')?.value;
+                    if (!existingGuestId) {
+                        showAlert('Выберите гостя из списка', 'error');
+                        return;
+                    }
+                    payload.guest_id = parseInt(existingGuestId, 10);
+                } else {
+                    const guestFullName = document.getElementById('guestFullName').value.trim();
+                    const guestPhone = document.getElementById('guestPhone').value.trim();
+                    const guestTelegram = document.getElementById('guestTelegram').value.trim();
+                    const normalizedPhone = normalizePhone(guestPhone);
+
+                    if (!guestFullName || !guestPhone || !guestTelegram) {
+                        showAlert('Заполните все поля гостя', 'error');
+                        return;
+                    }
+
+                    if (!normalizedPhone) {
+                        showAlert('Неверный формат телефона: 7 (XXX) XXX-XX-XX', 'error');
+                        return;
+                    }
+
+                    payload.guest_full_name = guestFullName;
+                    payload.guest_phone = normalizedPhone;
+                    payload.guest_telegram = guestTelegram;
+                }
+            } else {
+                const userId = document.getElementById('userId').value;
+                const pinCode = document.getElementById('pinCode').value;
+
+                if (!userId) {
+                    showAlert('Выберите пользователя', 'error');
+                    return;
+                }
+
+                if (!pinCode || pinCode.length !== 4) {
+                    showAlert('Введите 4-значный PIN-код', 'error');
+                    return;
+                }
+
+                payload.user_id = parseInt(userId, 10);
+                payload.pin_code = pinCode;
             }
 
             try {
                 const response = await fetch('/api/scan/take', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        user_id: parseInt(userId),
-                        pin_code: pinCode,
-                        equipment_id: equipmentId
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 const data = await response.json();
 
                 if (data.success) {
                     showAlert(data.message, 'success');
-                    setTimeout(() => location.reload(), 2000);
+                    setTimeout(() => location.reload(), 1500);
                 } else {
                     showAlert(data.message, 'error');
                 }
@@ -110,35 +409,45 @@
         }
 
         async function returnEquipment() {
-            const userId = document.getElementById('userId').value;
-            const pinCode = document.getElementById('pinCode').value;
+            const payload = { equipment_id: equipmentId };
 
-            if (!userId) {
-                showAlert('Выберите пользователя', 'error');
-                return;
-            }
+            if (IS_OCCUPIED_BY_GUEST) {
+                const guestId = document.getElementById('guestId')?.value;
+                if (!guestId) {
+                    showAlert('Выберите гостя', 'error');
+                    return;
+                }
+                payload.guest_id = parseInt(guestId, 10);
+            } else {
+                const userId = document.getElementById('userId')?.value;
+                const pinCode = document.getElementById('pinCode')?.value;
 
-            if (!pinCode || pinCode.length !== 4) {
-                showAlert('Введите 4-значный PIN-код', 'error');
-                return;
+                if (!userId) {
+                    showAlert('Выберите пользователя', 'error');
+                    return;
+                }
+
+                if (!pinCode || pinCode.length !== 4) {
+                    showAlert('Введите 4-значный PIN-код', 'error');
+                    return;
+                }
+
+                payload.user_id = parseInt(userId, 10);
+                payload.pin_code = pinCode;
             }
 
             try {
                 const response = await fetch('/api/scan/return', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        user_id: parseInt(userId),
-                        pin_code: pinCode,
-                        equipment_id: equipmentId
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 const data = await response.json();
 
                 if (data.success) {
                     showAlert(data.message, 'success');
-                    setTimeout(() => location.reload(), 2000);
+                    setTimeout(() => location.reload(), 1500);
                 } else {
                     showAlert(data.message, 'error');
                 }
@@ -155,12 +464,47 @@
             }, 5000);
         }
 
-        // Auto-focus PIN when user selected
-        document.getElementById('userId').addEventListener('change', function() {
-            if (this.value) {
-                document.getElementById('pinCode').focus();
-            }
-        });
+        if (EQUIPMENT_STATUS === 'available') {
+            document.querySelectorAll('input[name="actorType"]').forEach((radio) => {
+                radio.addEventListener('change', updateActorTypeUI);
+            });
+            document.getElementById('guestMode')?.addEventListener('change', updateGuestModeUI);
+            updateActorTypeUI();
+        }
+
+        setupDigitsOnlyMask('returnDate', formatReturnDateMask, 10);
+        setupDigitsOnlyMask('guestPhone', formatPhoneMask, 11);
     </script>
+
+    <style>
+        .actor-switch {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .actor-option {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 48px;
+            padding: 0 12px;
+            border-radius: 10px;
+            border: 1px solid var(--color-secondary);
+            background: #fff;
+            cursor: pointer;
+            font-weight: 600;
+            width: 100%;
+        }
+
+        .actor-option span {
+            white-space: nowrap;
+        }
+
+        .actor-option input {
+            margin: 0;
+        }
+    </style>
 </body>
 </html>

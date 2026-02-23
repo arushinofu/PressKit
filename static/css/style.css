@@ -82,7 +82,8 @@ body {
     font-size: 14px;
 }
 
-.form-group input {
+.form-group input,
+.form-group select {
     width: 100%;
     padding: 14px 16px;
     border: 2px solid var(--color-secondary);
@@ -93,7 +94,8 @@ body {
     font-family: inherit;
 }
 
-.form-group input:focus {
+.form-group input:focus,
+.form-group select:focus {
     outline: none;
     border-color: var(--color-blue);
     background: white;
@@ -102,6 +104,10 @@ body {
 
 .form-group input::placeholder {
     color: #999;
+}
+
+.touch-target {
+    min-height: 44px;
 }
 
 .btn {
@@ -336,6 +342,11 @@ body {
     box-shadow: 0 8px 24px rgba(0, 92, 201, 0.15);
 }
 
+.item-card-overdue {
+    border-color: #dc3545;
+    background: #fff1f2;
+}
+
 .item-card h3 {
     color: var(--color-blue);
     margin-bottom: 12px;
@@ -347,6 +358,36 @@ body {
     margin: 8px 0;
     font-size: 14px;
     color: #555;
+}
+
+.return-deadline {
+    margin-top: 10px;
+    color: #555;
+    font-size: 13px;
+}
+
+.return-deadline-overdue {
+    color: #dc3545;
+    font-weight: 700;
+}
+
+.user-equipment-list {
+    margin-top: 12px;
+    display: grid;
+    gap: 8px;
+}
+
+.user-equipment-item {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: white;
+    border: 1px solid var(--color-secondary);
+    font-size: 13px;
+}
+
+.user-equipment-overdue {
+    border-color: #dc3545;
+    background: #fff1f2;
 }
 
 .item-card .badge {
@@ -590,6 +631,16 @@ body {
     color: var(--color-text);
     font-weight: 600;
     margin-bottom: 16px;
+}
+
+.equipment-deadline {
+    margin-bottom: 8px;
+    color: #666;
+}
+
+.equipment-deadline-overdue {
+    color: #dc3545;
+    font-weight: 700;
 }
 
 .status-badge {

@@ -15,6 +15,7 @@
 
         <div class="tabs">
             <button class="tab active" onclick="switchTab('users')">Пользователи</button>
+            <button class="tab" onclick="switchTab('guests')">Гости</button>
             <button class="tab" onclick="switchTab('equipment')">Оборудование</button>
             <button class="tab" onclick="switchTab('packs')">Паки</button>
             <button class="tab" onclick="switchTab('logs')">Команды</button>
@@ -42,6 +43,14 @@
             </div>
 
             <div class="items-grid" id="usersGrid"></div>
+        </div>
+
+        <!-- Guests Tab -->
+        <div class="tab-content" id="guestsTab">
+            <div class="section-header">
+                <h2>Гости</h2>
+            </div>
+            <div class="items-grid" id="guestsGrid"></div>
         </div>
 
         <!-- Equipment Tab -->
@@ -182,11 +191,11 @@
                     <input type="text" id="equipmentNumber" required>
                 </div>
                 <div class="form-group">
-                    <label for="equipmentGeneralName">Общее название</label>
+                    <label for="equipmentGeneralName">Название</label>
                     <input type="text" id="equipmentGeneralName" required>
                 </div>
                 <div class="form-group">
-                    <label for="equipmentSpecificName">Конкретное название</label>
+                    <label for="equipmentSpecificName">Описание</label>
                     <input type="text" id="equipmentSpecificName" required>
                 </div>
                 <div class="form-group">
@@ -268,6 +277,7 @@
         async function loadData() {
             await Promise.all([
                 loadUsers(),
+                loadGuests(),
                 loadEquipment(),
                 loadPacks(),
                 loadLogs(),
@@ -283,6 +293,16 @@
             } catch (e) {
                 console.error('Error loading users:', e);
                 window.users = [];
+            }
+        }
+
+        async function loadGuests() {
+            try {
+                const response = await fetch('/api/guests');
+                window.guests = await response.json();
+            } catch (e) {
+                console.error('Error loading guests:', e);
+                window.guests = [];
             }
         }
 
@@ -430,8 +450,15 @@
 
                 if (data.current_equipment.length > 0) {
                     data.current_equipment.forEach(eq => {
-                        html += `<div style="padding: 10px; background: var(--color-primary); border-radius: 6px; margin-bottom: 10px;">
-                            <strong>${eq.general_name}</strong> - ${eq.specific_name} (№${eq.number})
+                        const overdueStyles = eq.is_overdue ? 'border: 2px solid var(--color-danger); background: #fff1f2;' : '';
+                        const deadlineHtml = eq.return_date
+                            ? `<br><small style="color: ${eq.is_overdue ? 'var(--color-danger)' : '#666'};">
+                                Возврат до: ${eq.return_date}${eq.is_overdue ? ' (просрочено)' : ''}
+                               </small>`
+                            : '';
+
+                        html += `<div style="padding: 10px; background: var(--color-primary); border-radius: 6px; margin-bottom: 10px; ${overdueStyles}">
+                            <strong>${eq.name}</strong> - ${eq.description} (№${eq.number})${deadlineHtml}
                         </div>`;
                     });
                 } else {
@@ -472,8 +499,8 @@
             document.getElementById('equipmentModalTitle').textContent = 'Редактировать оборудование';
             document.getElementById('equipmentCategory').value = eq.category;
             document.getElementById('equipmentNumber').value = eq.number;
-            document.getElementById('equipmentGeneralName').value = eq.general_name;
-            document.getElementById('equipmentSpecificName').value = eq.specific_name;
+            document.getElementById('equipmentGeneralName').value = eq.name || eq.general_name;
+            document.getElementById('equipmentSpecificName').value = eq.description || eq.specific_name;
             document.getElementById('equipmentStatus').value = eq.status;
             document.getElementById('equipmentModal').classList.add('active');
         }
@@ -484,8 +511,8 @@
             const data = {
                 category: document.getElementById('equipmentCategory').value,
                 number: document.getElementById('equipmentNumber').value,
-                general_name: document.getElementById('equipmentGeneralName').value,
-                specific_name: document.getElementById('equipmentSpecificName').value,
+                name: document.getElementById('equipmentGeneralName').value,
+                description: document.getElementById('equipmentSpecificName').value,
                 status: document.getElementById('equipmentStatus').value
             };
 
@@ -511,6 +538,7 @@
                 closeModal('equipmentModal');
 
                 await loadEquipment();
+                await loadGuests();
                 await loadCategories();
                 await loadLogs();
                 updateUI();
@@ -525,6 +553,7 @@
             try {
                 await fetch(`/api/equipment/${equipmentId}`, { method: 'DELETE' });
                 await loadEquipment();
+                await loadGuests();
                 await loadLogs();
                 await loadCategories();
                 updateUI();
@@ -547,7 +576,7 @@
                 <div style="padding: 12px; background: var(--color-primary); border-radius: 8px; margin-bottom: 10px; display: flex; align-items: center; gap: 12px;">
                     <input type="checkbox" id="pack_eq_${eq.id}" value="${eq.id}" style="width: 20px; height: 20px; cursor: pointer;">
                     <label for="pack_eq_${eq.id}" style="flex: 1; cursor: pointer;">
-                        <strong>${eq.general_name}</strong> - ${eq.specific_name} (№${eq.number})
+                        <strong>${eq.name || eq.general_name}</strong> - ${eq.description || eq.specific_name} (№${eq.number})
                     </label>
                 </div>
             `).join('');
@@ -617,11 +646,52 @@
                     <h3>${user.full_name}</h3>
                     <p><strong>Telegram:</strong> ${user.telegram}</p>
                     <p><strong>PIN:</strong> ${user.pin_code}</p>
+                    ${
+                        (user.current_equipment && user.current_equipment.length > 0)
+                            ? `<div class="user-equipment-list">
+                                ${user.current_equipment.map(eq => `
+                                    <div class="user-equipment-item ${eq.is_overdue ? 'user-equipment-overdue' : ''}">
+                                        <strong>№${eq.number}</strong> ${eq.name}
+                                        ${eq.return_date ? `<br><small>До: ${eq.return_date}${eq.is_overdue ? ' (просрочено)' : ''}</small>` : ''}
+                                    </div>
+                                `).join('')}
+                            </div>`
+                            : '<p style="color: #999;"><strong>Взято:</strong> нет</p>'
+                    }
                     <div class="item-actions">
                         <button class="btn-small btn-view" onclick="viewUserDetails(${user.id})">Подробнее</button>
                         <button class="btn-small btn-edit" onclick="openEditUserModal(${user.id})">Изменить</button>
                         <button class="btn-small btn-delete" onclick="deleteUser(${user.id})">Удалить</button>
                     </div>
+                </div>
+            `).join('');
+        }
+
+        function renderGuests() {
+            const grid = document.getElementById('guestsGrid');
+
+            if (!guests || guests.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><h3>Нет активных гостей</h3></div>';
+                return;
+            }
+
+            grid.innerHTML = guests.map(guest => `
+                <div class="item-card">
+                    <h3>${guest.full_name} <span style="font-size: 13px; color: #666;">(гость)</span></h3>
+                    <p><strong>Телефон:</strong> ${guest.phone}</p>
+                    <p><strong>Telegram:</strong> ${guest.telegram}</p>
+                    ${
+                        (guest.current_equipment && guest.current_equipment.length > 0)
+                            ? `<div class="user-equipment-list">
+                                ${guest.current_equipment.map(eq => `
+                                    <div class="user-equipment-item ${eq.is_overdue ? 'user-equipment-overdue' : ''}">
+                                        <strong>№${eq.number}</strong> ${eq.name}
+                                        ${eq.return_date ? `<br><small>До: ${eq.return_date}${eq.is_overdue ? ' (просрочено)' : ''}</small>` : ''}
+                                    </div>
+                                `).join('')}
+                            </div>`
+                            : '<p style="color: #999;"><strong>Взято:</strong> нет</p>'
+                    }
                 </div>
             `).join('');
         }
@@ -641,18 +711,28 @@
                     'occupied': 'Занято',
                     'broken': 'Сломано'
                 }[eq.status];
+                const cardClass = eq.is_overdue ? 'item-card item-card-overdue' : 'item-card';
 
                 let occupiedBy = '';
                 if (eq.status === 'occupied' && eq.current_user_name) {
                     occupiedBy = ` (${eq.current_user_name})`;
+                } else if (eq.status === 'occupied' && eq.current_guest_name) {
+                    occupiedBy = ` (${eq.current_guest_name})`;
                 }
 
+                const deadlineHtml = eq.return_date
+                    ? `<p class="return-deadline ${eq.is_overdue ? 'return-deadline-overdue' : ''}">
+                        <strong>Возврат до:</strong> ${eq.return_date}${eq.is_overdue ? ' (просрочено)' : ''}
+                    </p>`
+                    : '';
+
                 return `
-                    <div class="item-card">
-                        <h3>${eq.general_name}</h3>
+                    <div class="${cardClass}">
+                        <h3>${eq.name || eq.general_name}</h3>
                         <p><strong>№${eq.number}</strong></p>
-                        <p>${eq.specific_name}</p>
+                        <p>${eq.description || eq.specific_name}</p>
                         <p><strong>Категория:</strong> ${eq.category || '-'}</p>
+                        ${deadlineHtml}
                         <span class="badge ${statusClass}">${statusText}${occupiedBy}</span>
                         <div class="item-actions">
                             <button class="btn-small btn-edit" onclick="openEditEquipmentModal(${eq.id})">Изменить</button>
@@ -677,7 +757,7 @@
                     <p><strong>Предметов:</strong> ${pack.items_count}</p>
                     ${pack.equipment.map(eq => `
                         <div style="padding: 6px; background: white; border-radius: 4px; margin: 5px 0; font-size: 13px;">
-                            ${eq.general_name} №${eq.number}
+                            ${eq.name || eq.general_name} №${eq.number}
                             <span class="badge badge-${eq.status}" style="float: right; padding: 2px 8px; font-size: 11px;">
                                 ${eq.status === 'available' ? 'Доступно' : eq.status === 'occupied' ? 'Занято' : 'Сломано'}
                             </span>
@@ -701,7 +781,7 @@
             tbody.innerHTML = logs.slice(0, 100).map(log => `
                 <tr>
                     <td>${new Date(log.timestamp).toLocaleString('ru-RU')}</td>
-                    <td>${log.user_name || '-'}</td>
+                    <td>${log.user_name || 'admin'}</td>
                     <td>${log.action}</td>
                     <td>${log.equipment_name || '-'}</td>
                     <td>${log.details || '-'}</td>
@@ -742,6 +822,7 @@
 
         function updateUI() {
             renderUsers();
+            renderGuests();
             renderEquipment();
             renderPacks();
             renderLogs();
@@ -811,7 +892,7 @@
 
             const formats = {
                 'users': 'ФИ; Телеграм; PIN-код',
-                'equipment': 'Категория; Номер; Общее название; Конкретное название; Статус',
+                'equipment': 'Категория; Номер; Название; Описание; Статус',
                 'packs': 'Название пака; Номера оборудования (через запятую)'
             };
 

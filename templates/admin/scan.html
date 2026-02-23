@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ equipment.general_name }} - PressKit</title>
+    <title>{{ equipment.name }} - PressKit</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
     <div class="scan-container">
         <div class="scan-box">
-            <h1>{{ equipment.general_name }}</h1>
-            <p class="equipment-details">{{ equipment.specific_name }}</p>
+            <h1>{{ equipment.name }}</h1>
+            <p class="equipment-details">{{ equipment.description }}</p>
             <p class="equipment-number">Номер: {{ equipment.number }}</p>
 
             <div class="status-badge status-{{ equipment.status }}">
@@ -26,7 +26,7 @@
             <form id="actionForm">
                 <div class="form-group">
                     <label>Выберите пользователя</label>
-                    <select id="userId" required>
+                    <select id="userId" required class="touch-target">
                         <option value="">-- Выберите --</option>
                         {% for user in users %}
                         <option value="{{ user.id }}">{{ user.full_name }}</option>
@@ -36,8 +36,14 @@
 
                 <div class="form-group">
                     <label>PIN-код</label>
-                    <input type="password" id="pinCode" maxlength="4" required>
+                    <input type="password" id="pinCode" maxlength="4" required class="touch-target">
                 </div>
+                {% if equipment.status == 'available' %}
+                <div class="form-group">
+                    <label>Дата возврата</label>
+                    <input type="text" id="returnDate" placeholder="24.03.25 12:00" required class="touch-target">
+                </div>
+                {% endif %}
 
                 <div class="action-buttons">
                     {% if equipment.status == 'available' %}
@@ -58,20 +64,73 @@
 
     <script>
         const equipmentId = {{ equipment.id }};
+        const RETURN_DATE_REGEX = /^\d{2}\.\d{2}\.\d{2} \d{2}:\d{2}$/;
+
+        function formatReturnDateMask(rawValue) {
+            const digits = rawValue.replace(/\D/g, '').slice(0, 10);
+            const parts = [
+                digits.slice(0, 2),
+                digits.slice(2, 4),
+                digits.slice(4, 6),
+                digits.slice(6, 8),
+                digits.slice(8, 10)
+            ];
+
+            let result = '';
+            if (parts[0]) result += parts[0];
+            if (parts[1]) result += `.${parts[1]}`;
+            if (parts[2]) result += `.${parts[2]}`;
+            if (parts[3]) result += ` ${parts[3]}`;
+            if (parts[4]) result += `:${parts[4]}`;
+            return result;
+        }
+
+        function setupReturnDateMask(inputId) {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+
+            input.addEventListener('keydown', function(event) {
+                const allowedKeys = ['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End'];
+                if (allowedKeys.includes(event.key) || event.ctrlKey || event.metaKey) {
+                    return;
+                }
+
+                if (!/^\d$/.test(event.key)) {
+                    event.preventDefault();
+                    return;
+                }
+
+                const selectionLength = (this.selectionEnd || 0) - (this.selectionStart || 0);
+                const digitsCount = this.value.replace(/\D/g, '').length;
+                if (digitsCount - selectionLength >= 10) {
+                    event.preventDefault();
+                }
+            });
+
+            input.addEventListener('input', function() {
+                this.value = formatReturnDateMask(this.value);
+            });
+        }
 
         async function takeEquipment() {
             const userId = document.getElementById('userId').value;
             const pinCode = document.getElementById('pinCode').value;
+            const returnDate = document.getElementById('returnDate')?.value.trim() || '';
 
-            if (!userId || !pinCode) {
+            if (!userId || !pinCode || !returnDate) {
                 alert('Заполните все поля');
+                return;
+            }
+
+            if (!RETURN_DATE_REGEX.test(returnDate)) {
+                alert('Укажите дату в формате ДД.ММ.ГГ ЧЧ:ММ');
                 return;
             }
 
             const response = await fetch('/api/scan/take', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({user_id: userId, pin_code: pinCode, equipment_id: equipmentId})
+                body: JSON.stringify({user_id: userId, pin_code: pinCode, equipment_id: equipmentId, return_date: returnDate})
             });
 
             const data = await response.json();
@@ -108,6 +167,8 @@
                 alert(data.message);
             }
         }
+
+        setupReturnDateMask('returnDate');
     </script>
 </body>
 </html>

@@ -32,6 +32,17 @@ class User(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+class Guest(db.Model):
+    __tablename__ = 'guests'
+
+    id = db.Column(db.Integer, primary_key=True)
+    full_name = db.Column(db.String(200), nullable=False)
+    phone = db.Column(db.String(30), nullable=False, unique=True)
+    telegram = db.Column(db.String(100), nullable=False)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class Category(db.Model):
     __tablename__ = 'categories'
 
@@ -46,15 +57,36 @@ class Equipment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     number = db.Column(db.String(50), unique=True, nullable=False)
     category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=True)
-    general_name = db.Column(db.String(200), nullable=False)
-    specific_name = db.Column(db.String(500), nullable=False)
+    name = db.Column('general_name', db.String(200), nullable=False)
+    description = db.Column('specific_name', db.String(500), nullable=False)
     status = db.Column(db.String(20), default='available')  # available, occupied, broken
     current_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    current_guest_id = db.Column(db.Integer, db.ForeignKey('guests.id'), nullable=True)
+    return_date = db.Column(db.DateTime, nullable=True)
     qr_code_path = db.Column(db.String(500))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     current_user = db.relationship('User', foreign_keys=[current_user_id], backref='equipment')
+    current_guest = db.relationship('Guest', foreign_keys=[current_guest_id], backref='equipment')
     pack_memberships = db.relationship('PackEquipment', backref='equipment', lazy=True)
+
+    @property
+    def general_name(self):
+        """Обратносовместимый псевдоним для старых шаблонов и интерфейсов."""
+        return self.name
+
+    @general_name.setter
+    def general_name(self, value):
+        self.name = value
+
+    @property
+    def specific_name(self):
+        """Обратносовместимый псевдоним для старых шаблонов и интерфейсов."""
+        return self.description
+
+    @specific_name.setter
+    def specific_name(self, value):
+        self.description = value
 
 
 class Pack(db.Model):
@@ -79,6 +111,7 @@ class Log(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    guest_id = db.Column(db.Integer, db.ForeignKey('guests.id'), nullable=True)
     equipment_id = db.Column(db.Integer, db.ForeignKey('equipment.id'), nullable=True)
     pack_id = db.Column(db.Integer, db.ForeignKey('packs.id'), nullable=True)
     action = db.Column(db.String(50), nullable=False)
@@ -86,5 +119,6 @@ class Log(db.Model):
     timestamp = db.Column(db.DateTime, default=datetime.now)
 
     user = db.relationship('User', foreign_keys=[user_id], backref='logs')
+    guest = db.relationship('Guest', foreign_keys=[guest_id], backref='logs')
     equipment = db.relationship('Equipment', foreign_keys=[equipment_id], backref='logs')
     pack = db.relationship('Pack', foreign_keys=[pack_id], backref='logs')

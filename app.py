@@ -1,14 +1,15 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for, session, Response
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session, Response, abort
 from flask_login import login_user, logout_user, login_required, current_user
 from apscheduler.schedulers.background import BackgroundScheduler
 import os
+import re
 from datetime import datetime, timedelta
 import random
 import io
 import csv
 
 from config import Config
-from models import db, Admin, User, Equipment, Category, Pack, PackEquipment, Log
+from models import db, Admin, User, Guest, Equipment, Category, Pack, PackEquipment, Log
 from database import init_database
 from auth import login_manager
 from qr_generator import generate_equipment_qr, generate_pack_qr
@@ -22,30 +23,22 @@ login_manager.init_app(app)
 login_manager.login_view = 'show_admin_login_page'
 init_database(app)
 
+RETURN_DATE_FORMAT = '%d.%m.%y %H:%M'
+RETURN_DATE_REGEX = re.compile(r'^\d{2}\.\d{2}\.\d{2} \d{2}:\d{2}$')
+RETURN_DEADLINE_CHECK_MINUTES = 1
+
 
 @app.before_request
 def configure_session():
     session.permanent = True
 
 
-# Настройка автоматических бэкапов
-scheduler = BackgroundScheduler()
-scheduler.add_job(
-    func=create_backup,
-    trigger="interval",
-    hours=Config.BACKUP_INTERVAL_HOURS,
-    next_run_time=datetime.now()
-)
-scheduler.start()
-print(f"Планировщик бэкапов запущен (каждые {Config.BACKUP_INTERVAL_HOURS} часов)")
-create_backup()
-
-
 # Вспомогательные функции
-def add_log(action, details, user_id=None, equipment_id=None, pack_id=None):
-    """Создает запись в логе"""
+def add_log(action, details, user_id=None, guest_id=None, equipment_id=None, pack_id=None):
+    """Создаёт запись в журнале."""
     log = Log(
         user_id=user_id,
+        guest_id=guest_id,
         equipment_id=equipment_id,
         pack_id=pack_id,
         action=action,
@@ -55,11 +48,258 @@ def add_log(action, details, user_id=None, equipment_id=None, pack_id=None):
     db.session.commit()
 
 
+def format_return_date(value):
+    """Преобразует дату и время в формат для интерфейса."""
+    if not value:
+        return None
+    return value.strftime(RETURN_DATE_FORMAT)
+
+
+def parse_return_date(value):
+    """Разбирает и проверяет дату возврата в формате ДД.ММ.ГГ ЧЧ:ММ."""
+    raw_value = (value or '').strip()
+    if not raw_value:
+        raise ValueError('Укажите дату возврата в формате ДД.ММ.ГГ ЧЧ:ММ')
+
+    if not RETURN_DATE_REGEX.match(raw_value):
+        raise ValueError('Неверный формат даты. Используйте ДД.ММ.ГГ ЧЧ:ММ')
+
+    try:
+        parsed_date = datetime.strptime(raw_value, RETURN_DATE_FORMAT)
+    except ValueError as exc:
+        raise ValueError('Неверная дата возврата. Проверьте введённые дату и время') from exc
+
+    if parsed_date <= datetime.now():
+        raise ValueError('Дата возврата должна быть в будущем')
+
+    return parsed_date
+
+
+def is_equipment_overdue(equipment, reference_time=None):
+    """Возвращает истину, если у занятого оборудования просрочен дедлайн возврата."""
+    now = reference_time or datetime.now()
+    return bool(
+        equipment.status == 'occupied'
+        and equipment.return_date
+        and equipment.return_date < now
+    )
+
+
+def get_equipment_holder_name(equipment):
+    if equipment.current_user:
+        return equipment.current_user.full_name
+    if equipment.current_guest:
+        return f"{equipment.current_guest.full_name} (гость)"
+    return 'неизвестный пользователь'
+
+
+def get_log_user_name(log_item):
+    """Возвращает подпись пользователя для логов."""
+    if log_item.user:
+        return log_item.user.full_name
+    if log_item.guest:
+        return f"{log_item.guest.full_name} (гость)"
+    return 'admin'
+
+
+def get_guest_log_identity(guest):
+    """Формирует подпись гостя для деталей лога с контактами."""
+    phone = (guest.phone or '').strip() or '-'
+    telegram = (guest.telegram or '').strip() or '-'
+    return f"{guest.full_name} (гость) [{phone}/{telegram}]"
+
+
+def normalize_phone(phone_value):
+    """Нормализует номер телефона к формату 7 (000) 000-00-00."""
+    digits = re.sub(r'\D', '', phone_value or '')
+    if len(digits) != 11 or digits[0] not in {'7', '8'}:
+        raise ValueError('Неверный формат телефона. Используйте 7 (XXX) XXX-XX-XX')
+
+    digits = '7' + digits[1:]
+    return f"7 ({digits[1:4]}) {digits[4:7]}-{digits[7:9]}-{digits[9:11]}"
+
+
+def parse_guest_data(data):
+    full_name = (data.get('guest_full_name') or '').strip()
+    raw_phone = (data.get('guest_phone') or '').strip()
+    telegram = (data.get('guest_telegram') or '').strip()
+
+    if not full_name:
+        raise ValueError('Укажите ФИО гостя')
+    if not raw_phone:
+        raise ValueError('Укажите номер телефона гостя')
+    phone = normalize_phone(raw_phone)
+    if not telegram:
+        raise ValueError('Укажите Telegram гостя')
+
+    return full_name, phone, telegram
+
+
+def get_or_create_guest(full_name, phone, telegram):
+    guest = Guest.query.filter_by(phone=phone).first()
+    if guest:
+        guest.full_name = full_name
+        guest.telegram = telegram
+        guest.is_active = True
+        db.session.flush()
+        return guest
+
+    guest = Guest(
+        full_name=full_name,
+        phone=phone,
+        telegram=telegram,
+        is_active=True
+    )
+    db.session.add(guest)
+    db.session.flush()
+    return guest
+
+
+def resolve_guest_for_take(data):
+    """Возвращает гостя по идентификатору или создаёт и обновляет по переданным полям."""
+    guest_id_raw = data.get('guest_id')
+    if guest_id_raw is not None and str(guest_id_raw).strip():
+        try:
+            guest_id = int(guest_id_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('Неверный ID гостя') from exc
+
+        guest = Guest.query.get(guest_id)
+        if not guest:
+            raise ValueError('Гость не найден')
+
+        guest.is_active = True
+        db.session.flush()
+        return guest
+
+    full_name, phone, telegram = parse_guest_data(data)
+    return get_or_create_guest(full_name, phone, telegram)
+
+
+def deactivate_guest_if_no_equipment(guest_id):
+    if not guest_id:
+        return
+
+    active_items = Equipment.query.filter_by(
+        current_guest_id=guest_id,
+        status='occupied'
+    ).count()
+
+    if active_items == 0:
+        guest = Guest.query.get(guest_id)
+        if guest and guest.is_active:
+            guest.is_active = False
+            db.session.commit()
+
+
+def detect_pack_actor(pack_equipment):
+    """Определяет, кто сейчас держит пак: пользователь или гость."""
+    if not pack_equipment:
+        return None, None
+
+    if not all(item.status == 'occupied' for item in pack_equipment):
+        return None, None
+
+    actor_tokens = set()
+    for item in pack_equipment:
+        if item.current_user_id:
+            actor_tokens.add(('user', item.current_user_id))
+        elif item.current_guest_id:
+            actor_tokens.add(('guest', item.current_guest_id))
+        else:
+            return None, None
+
+    if len(actor_tokens) != 1:
+        return None, None
+
+    actor_type, actor_id = actor_tokens.pop()
+    return actor_type, actor_id
+
+
+def equipment_is_guest_occupied(equipment):
+    return equipment.status == 'occupied' and equipment.current_guest_id is not None
+
+
+def equipment_is_user_occupied(equipment):
+    return equipment.status == 'occupied' and equipment.current_user_id is not None
+
+
 def get_pack_equipment(pack_id):
-    """Получает список оборудования в паке"""
+    """Возвращает список оборудования в паке."""
     return db.session.query(Equipment).join(
         PackEquipment, Equipment.id == PackEquipment.equipment_id
     ).filter(PackEquipment.pack_id == pack_id).all()
+
+
+def has_deadline_missed_log_since_last_take(equipment_id):
+    """Предотвращает дублирование логов просрочки в одном цикле выдачи."""
+    last_take_log = Log.query.filter_by(
+        equipment_id=equipment_id,
+        action='take'
+    ).order_by(Log.timestamp.desc()).first()
+    missed_deadline_query = Log.query.filter_by(
+        equipment_id=equipment_id,
+        action='дедлайн потерян'
+    )
+
+    if last_take_log:
+        missed_deadline_query = missed_deadline_query.filter(Log.timestamp >= last_take_log.timestamp)
+
+    return missed_deadline_query.first() is not None
+
+
+def check_overdue_equipment_deadlines():
+    """Фоновая задача проверяет дедлайны возврата и пишет логи о просрочке."""
+    with app.app_context():
+        now = datetime.now()
+        overdue_equipment = Equipment.query.filter(
+            Equipment.status == 'occupied',
+            Equipment.return_date.isnot(None),
+            Equipment.return_date < now
+        ).all()
+
+        new_logs = []
+        for equipment in overdue_equipment:
+            if has_deadline_missed_log_since_last_take(equipment.id):
+                continue
+
+            user_name = get_equipment_holder_name(equipment)
+            deadline_text = format_return_date(equipment.return_date)
+            new_logs.append(Log(
+                user_id=equipment.current_user_id,
+                guest_id=equipment.current_guest_id,
+                equipment_id=equipment.id,
+                action='дедлайн потерян',
+                details=(
+                    f"Просрочен возврат {equipment.name} №{equipment.number}. "
+                    f"Пользователь: {user_name}. Дедлайн: {deadline_text}"
+                )
+            ))
+
+        if new_logs:
+            db.session.add_all(new_logs)
+            db.session.commit()
+
+
+# Настройка автоматических задач
+scheduler = BackgroundScheduler()
+scheduler.add_job(
+    func=create_backup,
+    trigger='interval',
+    hours=Config.BACKUP_INTERVAL_HOURS,
+    next_run_time=datetime.now()
+)
+scheduler.add_job(
+    func=check_overdue_equipment_deadlines,
+    trigger='interval',
+    minutes=RETURN_DEADLINE_CHECK_MINUTES,
+    next_run_time=datetime.now() + timedelta(minutes=RETURN_DEADLINE_CHECK_MINUTES)
+)
+scheduler.start()
+print(f"Планировщик бэкапов запущен (каждые {Config.BACKUP_INTERVAL_HOURS} часов)")
+print(f"Планировщик дедлайнов запущен (каждые {RETURN_DEADLINE_CHECK_MINUTES} мин)")
+create_backup()
+check_overdue_equipment_deadlines()
 
 
 # Административные маршруты
@@ -116,7 +356,7 @@ def logout_admin():
 @login_required
 def list_all_users():
     search = request.args.get('search', '').strip()
-    
+
     query = User.query
     if search:
         query = query.filter(
@@ -125,15 +365,44 @@ def list_all_users():
                 User.telegram.ilike(f'%{search}%')
             )
         )
-    
-    users = query.all()
+
+    users = query.order_by(User.full_name).all()
     return jsonify([{
         'id': u.id,
         'full_name': u.full_name,
         'telegram': u.telegram,
         'pin_code': u.pin_code,
-        'created_at': u.created_at.isoformat()
+        'created_at': u.created_at.isoformat(),
+        'current_equipment': [{
+            'id': e.id,
+            'number': e.number,
+            'name': e.name,
+            'description': e.description,
+            'return_date': format_return_date(e.return_date),
+            'is_overdue': is_equipment_overdue(e)
+        } for e in Equipment.query.filter_by(current_user_id=u.id).order_by(Equipment.number).all()]
     } for u in users])
+
+
+@app.route('/api/guests', methods=['GET'])
+@login_required
+def list_all_guests():
+    guests = Guest.query.filter_by(is_active=True).order_by(Guest.full_name).all()
+    return jsonify([{
+        'id': g.id,
+        'full_name': g.full_name,
+        'phone': g.phone,
+        'telegram': g.telegram,
+        'created_at': g.created_at.isoformat(),
+        'current_equipment': [{
+            'id': e.id,
+            'number': e.number,
+            'name': e.name,
+            'description': e.description,
+            'return_date': format_return_date(e.return_date),
+            'is_overdue': is_equipment_overdue(e)
+        } for e in Equipment.query.filter_by(current_guest_id=g.id).order_by(Equipment.number).all()]
+    } for g in guests])
 
 
 @app.route('/api/users', methods=['POST'])
@@ -198,7 +467,7 @@ def remove_user(user_id):
 def get_user_activity_history(user_id):
     user = User.query.get_or_404(user_id)
 
-    current_equipment = Equipment.query.filter_by(current_user_id=user_id).all()
+    current_equipment = Equipment.query.filter_by(current_user_id=user_id).order_by(Equipment.number).all()
     user_logs = Log.query.filter_by(user_id=user_id).order_by(Log.timestamp.desc()).limit(50).all()
 
     return jsonify({
@@ -211,8 +480,10 @@ def get_user_activity_history(user_id):
         'current_equipment': [{
             'id': e.id,
             'number': e.number,
-            'general_name': e.general_name,
-            'specific_name': e.specific_name
+            'name': e.name,
+            'description': e.description,
+            'return_date': format_return_date(e.return_date),
+            'is_overdue': is_equipment_overdue(e)
         } for e in current_equipment],
         'logs': [{
             'id': l.id,
@@ -236,8 +507,8 @@ def list_all_equipment():
     if search:
         query = query.outerjoin(Category).filter(
             db.or_(
-                Equipment.general_name.ilike(f'%{search}%'),
-                Equipment.specific_name.ilike(f'%{search}%'),
+                Equipment.name.ilike(f'%{search}%'),
+                Equipment.description.ilike(f'%{search}%'),
                 Equipment.number.ilike(f'%{search}%'),
                 Category.name.ilike(f'%{search}%')
             )
@@ -249,16 +520,24 @@ def list_all_equipment():
     if status_filter:
         query = query.filter(Equipment.status == status_filter)
 
-    equipment = query.all()
+    now = datetime.now()
+    equipment = query.order_by(Equipment.number).all()
     return jsonify([{
         'id': e.id,
         'number': e.number,
         'category': e.category.name if e.category else None,
-        'general_name': e.general_name,
-        'specific_name': e.specific_name,
+        'name': e.name,
+        'description': e.description,
+        'general_name': e.name,  # Backward-compatible response keys
+        'specific_name': e.description,  # Backward-compatible response keys
         'status': e.status,
         'current_user_id': e.current_user_id,
         'current_user_name': e.current_user.full_name if e.current_user else None,
+        'current_guest_id': e.current_guest_id,
+        'current_guest_name': f"{e.current_guest.full_name} (гость)" if e.current_guest else None,
+        'occupied_by': 'guest' if e.current_guest_id else ('user' if e.current_user_id else None),
+        'return_date': format_return_date(e.return_date),
+        'is_overdue': is_equipment_overdue(e, now),
         'qr_code_path': e.qr_code_path,
         'created_at': e.created_at.isoformat()
     } for e in equipment])
@@ -268,9 +547,17 @@ def list_all_equipment():
 @login_required
 def add_equipment_item():
     data = request.get_json()
-    
+
+    category_name = (data.get('category') or '').strip()
+    equipment_name = (data.get('name') or data.get('general_name') or '').strip()
+    equipment_description = (data.get('description') or data.get('specific_name') or '').strip()
+
+    if not category_name:
+        return jsonify({'success': False, 'message': 'Категория обязательна'}), 400
+    if not equipment_name or not equipment_description:
+        return jsonify({'success': False, 'message': 'Заполните название и описание'}), 400
+
     # Получаем или создаем категорию
-    category_name = data['category'].strip()
     category = Category.query.filter_by(name=category_name).first()
     if not category:
         category = Category(name=category_name)
@@ -280,8 +567,8 @@ def add_equipment_item():
     equipment = Equipment(
         number=data['number'],
         category_id=category.id,
-        general_name=data['general_name'],
-        specific_name=data['specific_name'],
+        name=equipment_name,
+        description=equipment_description,
         status=data.get('status', 'available')
     )
     db.session.add(equipment)
@@ -310,24 +597,37 @@ def edit_equipment_item(equipment_id):
     equipment = Equipment.query.get_or_404(equipment_id)
     data = request.get_json()
     old_category_id = equipment.category_id
+    old_number = equipment.number
+    old_guest_id = equipment.current_guest_id
 
     # Обновление категории если нужно
     if 'category' in data:
-        category_name = data['category'].strip()
-        category = Category.query.filter_by(name=category_name).first()
-        if not category:
-            category = Category(name=category_name)
-            db.session.add(category)
-            db.session.flush()
-        equipment.category_id = category.id
+        category_name = (data.get('category') or '').strip()
+        if category_name:
+            category = Category.query.filter_by(name=category_name).first()
+            if not category:
+                category = Category(name=category_name)
+                db.session.add(category)
+                db.session.flush()
+            equipment.category_id = category.id
 
     equipment.number = data.get('number', equipment.number)
-    equipment.general_name = data.get('general_name', equipment.general_name)
-    equipment.specific_name = data.get('specific_name', equipment.specific_name)
+    equipment.name = (data.get('name') or data.get('general_name') or equipment.name)
+    equipment.description = (data.get('description') or data.get('specific_name') or equipment.description)
     equipment.status = data.get('status', equipment.status)
 
     if equipment.status == 'available':
         equipment.current_user_id = None
+        equipment.current_guest_id = None
+        equipment.return_date = None
+    elif equipment.status != 'occupied':
+        equipment.current_user_id = None
+        equipment.current_guest_id = None
+        equipment.return_date = None
+
+    if equipment.number != old_number or not equipment.qr_code_path or not equipment.qr_code_path.endswith('.svg'):
+        base_url = request.url_root.rstrip('/')
+        equipment.qr_code_path = generate_equipment_qr(equipment.id, equipment.number, base_url)
 
     db.session.commit()
 
@@ -340,6 +640,8 @@ def edit_equipment_item(equipment_id):
                 db.session.commit()
 
     add_log('edit', f"Оборудование №{equipment.number} отредактировано", equipment_id=equipment.id)
+    if old_guest_id and old_guest_id != equipment.current_guest_id:
+        deactivate_guest_if_no_equipment(old_guest_id)
 
     return jsonify({'success': True, 'equipment': {
         'id': equipment.id,
@@ -353,6 +655,7 @@ def remove_equipment_item(equipment_id):
     equipment = Equipment.query.get_or_404(equipment_id)
     equipment_number = equipment.number
     category_id = equipment.category_id
+    guest_id = equipment.current_guest_id
 
     # Удаляем связи с паками
     PackEquipment.query.filter_by(equipment_id=equipment_id).delete()
@@ -375,6 +678,7 @@ def remove_equipment_item(equipment_id):
             db.session.commit()
 
     add_log('delete', f"Оборудование №{equipment_number} удалено")
+    deactivate_guest_if_no_equipment(guest_id)
 
     return jsonify({'success': True})
 
@@ -410,9 +714,10 @@ def get_activity_logs():
     return jsonify([{
         'id': l.id,
         'user_id': l.user_id,
-        'user_name': l.user.full_name if l.user else None,
+        'guest_id': l.guest_id,
+        'user_name': get_log_user_name(l),
         'equipment_id': l.equipment_id,
-        'equipment_name': f"{l.equipment.general_name} №{l.equipment.number}" if l.equipment else None,
+        'equipment_name': f"{l.equipment.name} №{l.equipment.number}" if l.equipment else None,
         'action': l.action,
         'details': l.details,
         'timestamp': l.timestamp.isoformat()
@@ -429,9 +734,9 @@ def export_activity_logs_to_csv():
     for log in Log.query.order_by(Log.timestamp.desc()).all():
         writer.writerow([
             log.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-            log.user.full_name if log.user else '-',
+            get_log_user_name(log),
             log.action,
-            f"{log.equipment.general_name} №{log.equipment.number}" if log.equipment else '-',
+            f"{log.equipment.name} №{log.equipment.number}" if log.equipment else '-',
             log.details or '-'
         ])
 
@@ -440,7 +745,7 @@ def export_activity_logs_to_csv():
 
 # Экспорт/импорт данных
 def create_csv_response(csv_data, filename):
-    """Создает HTTP ответ с CSV файлом"""
+    """Формирует ответ с файлом табличных данных."""
     return Response(
         ('\ufeff' + csv_data).encode('utf-8'),
         mimetype='text/csv; charset=utf-8',
@@ -526,14 +831,14 @@ def import_users_from_csv():
 def export_equipment_to_csv():
     output = io.StringIO()
     writer = csv.writer(output, delimiter=';', quoting=csv.QUOTE_ALL)
-    writer.writerow(['Категория', 'Номер', 'Общее название', 'Конкретное название', 'Статус'])
+    writer.writerow(['Категория', 'Номер', 'Название', 'Описание', 'Статус'])
 
     for eq in Equipment.query.order_by(Equipment.category_id, Equipment.number).all():
         writer.writerow([
             eq.category.name if eq.category else '',
             eq.number,
-            eq.general_name,
-            eq.specific_name,
+            eq.name,
+            eq.description,
             eq.status
         ])
 
@@ -566,11 +871,11 @@ def import_equipment_from_csv():
 
             category_name = row[0].strip()
             number = row[1].strip()
-            general_name = row[2].strip()
-            specific_name = row[3].strip()
+            equipment_name = row[2].strip()
+            equipment_description = row[3].strip()
             status = row[4].strip().lower()
 
-            if not number or not general_name or not specific_name:
+            if not number or not equipment_name or not equipment_description:
                 errors.append(f"Строка {row_num}: пустые обязательные поля")
                 continue
 
@@ -594,8 +899,8 @@ def import_equipment_from_csv():
             equipment = Equipment(
                 number=number,
                 category_id=category.id if category else None,
-                general_name=general_name,
-                specific_name=specific_name,
+                name=equipment_name,
+                description=equipment_description,
                 status=status
             )
             db.session.add(equipment)
@@ -696,7 +1001,7 @@ def import_packs_from_csv():
             for eq_id in equipment_ids:
                 db.session.add(PackEquipment(pack_id=pack.id, equipment_id=eq_id))
 
-            pack.qr_code_path = generate_pack_qr(pack.id, pack_name, base_url)
+            pack.qr_code_path = generate_pack_qr(pack.id, equipment_numbers, base_url)
             imported += 1
 
         db.session.commit()
@@ -715,58 +1020,119 @@ def import_packs_from_csv():
 
 
 # Пользовательские маршруты (сканирование QR)
-@app.route('/scan/<int:equipment_id>')
-def show_equipment_scan_page(equipment_id):
-    equipment = Equipment.query.get_or_404(equipment_id)
+@app.route('/scan/<scan_token>')
+def show_equipment_scan_page(scan_token):
+    equipment = Equipment.query.filter_by(number=scan_token).first()
+
+    # Backward compatibility for old QR links: /scan/<equipment_id>
+    if not equipment and scan_token.isdigit():
+        legacy_equipment = Equipment.query.get(int(scan_token))
+        if legacy_equipment:
+            return redirect(url_for('show_equipment_scan_page', scan_token=legacy_equipment.number), code=302)
+
+    if not equipment:
+        abort(404)
+
     users = User.query.order_by(User.full_name).all()
-    return render_template('user/scan.html', equipment=equipment, users=users)
+    guests = Guest.query.filter_by(is_active=True).order_by(Guest.full_name).all()
+    return render_template('user/scan.html', equipment=equipment, users=users, guests=guests, now=datetime.now())
 
 
 @app.route('/api/scan/take', methods=['POST'])
 def borrow_equipment():
-    data = request.get_json()
-    user = User.query.get_or_404(data['user_id'])
+    data = request.get_json() or {}
     equipment = Equipment.query.get_or_404(data['equipment_id'])
-
-    if user.pin_code != data['pin_code']:
-        return jsonify({'success': False, 'message': 'Неверный PIN-код'}), 401
+    actor_type = data.get('actor_type', 'user')
+    try:
+        return_date = parse_return_date(data.get('return_date'))
+    except ValueError as error:
+        return jsonify({'success': False, 'message': str(error)}), 400
 
     if equipment.status != 'available':
         return jsonify({'success': False, 'message': 'Оборудование недоступно'}), 400
 
+    user = None
+    guest = None
+    if actor_type == 'guest':
+        try:
+            guest = resolve_guest_for_take(data)
+        except ValueError as error:
+            return jsonify({'success': False, 'message': str(error)}), 400
+    else:
+        user = User.query.get_or_404(data['user_id'])
+        if user.pin_code != data.get('pin_code'):
+            return jsonify({'success': False, 'message': 'Неверный PIN-код'}), 401
+
     equipment.status = 'occupied'
-    equipment.current_user_id = user.id
+    equipment.current_user_id = user.id if user else None
+    equipment.current_guest_id = guest.id if guest else None
+    equipment.return_date = return_date
     db.session.commit()
 
-    add_log('take', f"{user.full_name} взял {equipment.general_name} №{equipment.number}",
-            user_id=user.id, equipment_id=equipment.id)
+    return_date_text = format_return_date(return_date)
+    actor_name = user.full_name if user else get_guest_log_identity(guest)
+    add_log(
+        'take',
+        f"{actor_name} взял {equipment.name} №{equipment.number}. Дедлайн возврата: {return_date_text}",
+        user_id=user.id if user else None,
+        guest_id=guest.id if guest else None,
+        equipment_id=equipment.id
+    )
 
-    return jsonify({'success': True, 'message': f'Оборудование взято: {equipment.general_name}'})
+    return jsonify({
+        'success': True,
+        'message': f'Оборудование взято: {equipment.name}. Вернуть до {return_date_text}',
+        'actor_type': actor_type
+    })
 
 
 @app.route('/api/scan/return', methods=['POST'])
 def return_equipment_item():
-    data = request.get_json()
-    user = User.query.get_or_404(data['user_id'])
+    data = request.get_json() or {}
     equipment = Equipment.query.get_or_404(data['equipment_id'])
-
-    if user.pin_code != data['pin_code']:
-        return jsonify({'success': False, 'message': 'Неверный PIN-код'}), 401
 
     if equipment.status != 'occupied':
         return jsonify({'success': False, 'message': 'Оборудование не занято'}), 400
 
-    if equipment.current_user_id != user.id:
-        return jsonify({'success': False, 'message': 'Это оборудование взято другим пользователем'}), 400
+    user = None
+    guest = None
+    if equipment_is_guest_occupied(equipment):
+        guest = Guest.query.get_or_404(data.get('guest_id'))
+        if equipment.current_guest_id != guest.id:
+            return jsonify({'success': False, 'message': 'Это оборудование взято другим гостем'}), 400
+    elif equipment_is_user_occupied(equipment):
+        user = User.query.get_or_404(data.get('user_id'))
+        if user.pin_code != data.get('pin_code'):
+            return jsonify({'success': False, 'message': 'Неверный PIN-код'}), 401
+        if equipment.current_user_id != user.id:
+            return jsonify({'success': False, 'message': 'Это оборудование взято другим пользователем'}), 400
+    else:
+        return jsonify({'success': False, 'message': 'Не удалось определить владельца оборудования'}), 400
 
+    previous_deadline = format_return_date(equipment.return_date)
     equipment.status = 'available'
     equipment.current_user_id = None
+    equipment.current_guest_id = None
+    equipment.return_date = None
     db.session.commit()
 
-    add_log('return', f"{user.full_name} вернул {equipment.general_name} №{equipment.number}",
-            user_id=user.id, equipment_id=equipment.id)
+    actor_name = user.full_name if user else f"{guest.full_name} (гость)"
+    details = f"{actor_name} вернул {equipment.name} №{equipment.number}"
+    if previous_deadline:
+        details += f". Дедлайн был: {previous_deadline}"
 
-    return jsonify({'success': True, 'message': f'Оборудование возвращено: {equipment.general_name}'})
+    add_log(
+        'return',
+        details,
+        user_id=user.id if user else None,
+        guest_id=guest.id if guest else None,
+        equipment_id=equipment.id
+    )
+
+    if guest:
+        deactivate_guest_if_no_equipment(guest.id)
+
+    return jsonify({'success': True, 'message': f'Оборудование возвращено: {equipment.name}'})
 
 
 # Паки
@@ -775,71 +1141,126 @@ def show_pack_scan_page(pack_id):
     pack = Pack.query.get_or_404(pack_id)
     pack_equipment = get_pack_equipment(pack_id)
     users = User.query.order_by(User.full_name).all()
+    guests = Guest.query.filter_by(is_active=True).order_by(Guest.full_name).all()
 
     all_available = all(e.status == 'available' for e in pack_equipment)
-    
-    # Проверяем, все ли предметы заняты одним пользователем
-    any_occupied_by_current = False
-    if pack_equipment and pack_equipment[0].current_user_id:
-        first_user_id = pack_equipment[0].current_user_id
-        any_occupied_by_current = all(e.current_user_id == first_user_id for e in pack_equipment)
+    occupied_actor_type, occupied_actor_id = detect_pack_actor(pack_equipment)
+    all_occupied_same_actor = occupied_actor_type is not None
 
     return render_template('user/pack.html',
                           pack=pack,
                           pack_items=pack_equipment,
                           pack_items_ids=[e.id for e in pack_equipment],
                           users=users,
+                          guests=guests,
                           all_available=all_available,
-                          any_occupied_by_current=any_occupied_by_current)
+                          all_occupied_same_actor=all_occupied_same_actor,
+                          occupied_actor_type=occupied_actor_type,
+                          occupied_actor_id=occupied_actor_id,
+                          now=datetime.now())
 
 
 @app.route('/api/scan/take-pack', methods=['POST'])
 def borrow_equipment_pack():
-    data = request.get_json()
-    user = User.query.get_or_404(data['user_id'])
+    data = request.get_json() or {}
     pack_id = data['pack_id']
-
-    if user.pin_code != data['pin_code']:
-        return jsonify({'success': False, 'message': 'Неверный PIN-код'}), 401
+    actor_type = data.get('actor_type', 'user')
+    try:
+        return_date = parse_return_date(data.get('return_date'))
+    except ValueError as error:
+        return jsonify({'success': False, 'message': str(error)}), 400
 
     pack_equipment = get_pack_equipment(pack_id)
     unavailable = [e for e in pack_equipment if e.status != 'available']
-    
+
     if unavailable:
         return jsonify({'success': False, 'message': 'Некоторые предметы недоступны'}), 400
 
+    user = None
+    guest = None
+    if actor_type == 'guest':
+        try:
+            guest = resolve_guest_for_take(data)
+        except ValueError as error:
+            return jsonify({'success': False, 'message': str(error)}), 400
+    else:
+        user = User.query.get_or_404(data['user_id'])
+        if user.pin_code != data.get('pin_code'):
+            return jsonify({'success': False, 'message': 'Неверный PIN-код'}), 401
+
+    return_date_text = format_return_date(return_date)
+    actor_name = user.full_name if user else get_guest_log_identity(guest)
     for equipment in pack_equipment:
         equipment.status = 'occupied'
-        equipment.current_user_id = user.id
-        add_log('take', f"{user.full_name} взял {equipment.general_name} №{equipment.number} (из пака)",
-                user_id=user.id, equipment_id=equipment.id, pack_id=pack_id)
+        equipment.current_user_id = user.id if user else None
+        equipment.current_guest_id = guest.id if guest else None
+        equipment.return_date = return_date
+        db.session.add(Log(
+            user_id=user.id if user else None,
+            guest_id=guest.id if guest else None,
+            equipment_id=equipment.id,
+            pack_id=pack_id,
+            action='take',
+            details=(
+                f"{actor_name} взял {equipment.name} №{equipment.number} (из пака). "
+                f"Дедлайн возврата: {return_date_text}"
+            )
+        ))
 
     db.session.commit()
-    return jsonify({'success': True, 'message': f'Взято {len(pack_equipment)} предметов из пака'})
+    return jsonify({
+        'success': True,
+        'message': f'Взято {len(pack_equipment)} предметов из пака. Вернуть до {return_date_text}'
+    })
 
 
 @app.route('/api/scan/return-pack', methods=['POST'])
 def return_equipment_pack():
-    data = request.get_json()
-    user = User.query.get_or_404(data['user_id'])
+    data = request.get_json() or {}
     pack_id = data['pack_id']
 
-    if user.pin_code != data['pin_code']:
-        return jsonify({'success': False, 'message': 'Неверный PIN-код'}), 401
-
     pack_equipment = get_pack_equipment(pack_id)
-    not_by_user = [e for e in pack_equipment if e.current_user_id != user.id]
-    
-    if not_by_user:
-        return jsonify({'success': False, 'message': 'Не все предметы взяты вами'}), 400
+    actor_type, actor_id = detect_pack_actor(pack_equipment)
+    if not actor_type:
+        return jsonify({'success': False, 'message': 'Пак нельзя вернуть целиком: разные владельцы или статусы'}), 400
+
+    user = None
+    guest = None
+    if actor_type == 'guest':
+        guest = Guest.query.get_or_404(data.get('guest_id'))
+        if guest.id != actor_id:
+            return jsonify({'success': False, 'message': 'Пак взят другим гостем'}), 400
+    else:
+        user = User.query.get_or_404(data.get('user_id'))
+        if user.pin_code != data.get('pin_code'):
+            return jsonify({'success': False, 'message': 'Неверный PIN-код'}), 401
+        if user.id != actor_id:
+            return jsonify({'success': False, 'message': 'Пак взят другим пользователем'}), 400
 
     for equipment in pack_equipment:
+        previous_deadline = format_return_date(equipment.return_date)
         equipment.status = 'available'
         equipment.current_user_id = None
-        add_log('return', f"{user.full_name} вернул {equipment.general_name} №{equipment.number} (из пака)",
-                user_id=user.id, equipment_id=equipment.id, pack_id=pack_id)
+        equipment.current_guest_id = None
+        equipment.return_date = None
+
+        actor_name = user.full_name if user else f"{guest.full_name} (гость)"
+        details = f"{actor_name} вернул {equipment.name} №{equipment.number} (из пака)"
+        if previous_deadline:
+            details += f". Дедлайн был: {previous_deadline}"
+
+        db.session.add(Log(
+            user_id=user.id if user else None,
+            guest_id=guest.id if guest else None,
+            equipment_id=equipment.id,
+            pack_id=pack_id,
+            action='return',
+            details=details
+        ))
 
     db.session.commit()
+    if guest:
+        deactivate_guest_if_no_equipment(guest.id)
     return jsonify({'success': True, 'message': f'Возвращено {len(pack_equipment)} предметов из пака'})
 
 
@@ -860,8 +1281,17 @@ def list_all_packs():
             'equipment': [{
                 'id': e.id,
                 'number': e.number,
-                'general_name': e.general_name,
-                'status': e.status
+                'name': e.name,
+                'description': e.description,
+                'general_name': e.name,  # Backward-compatible response key
+                'status': e.status,
+                'current_user_id': e.current_user_id,
+                'current_user_name': e.current_user.full_name if e.current_user else None,
+                'current_guest_id': e.current_guest_id,
+                'current_guest_name': f"{e.current_guest.full_name} (гость)" if e.current_guest else None,
+                'occupied_by': 'guest' if e.current_guest_id else ('user' if e.current_user_id else None),
+                'return_date': format_return_date(e.return_date),
+                'is_overdue': is_equipment_overdue(e)
             } for e in pack_equipment],
             'created_at': pack.created_at.isoformat()
         })
@@ -875,11 +1305,13 @@ def create_equipment_pack():
     data = request.get_json()
     equipment_ids = data['equipment_ids']
     pack_name = data.get('pack_name', '')
+    equipment_items = Equipment.query.filter(Equipment.id.in_(equipment_ids)).all()
+    equipment_by_id = {item.id: item for item in equipment_items}
+    ordered_numbers = [equipment_by_id[item_id].number for item_id in equipment_ids if item_id in equipment_by_id]
 
     # Генерируем имя пака из номеров оборудования если не указано
     if not pack_name:
-        equipment_items = Equipment.query.filter(Equipment.id.in_(equipment_ids)).all()
-        pack_name = '_'.join([e.number for e in equipment_items])
+        pack_name = '_'.join(ordered_numbers)
 
     pack = Pack(name=pack_name)
     db.session.add(pack)
@@ -889,7 +1321,7 @@ def create_equipment_pack():
         db.session.add(PackEquipment(pack_id=pack.id, equipment_id=eq_id))
 
     base_url = request.url_root.rstrip('/')
-    pack.qr_code_path = generate_pack_qr(pack.id, pack_name, base_url)
+    pack.qr_code_path = generate_pack_qr(pack.id, ordered_numbers, base_url)
     db.session.commit()
 
     add_log('create', f"Создан пак '{pack_name}' из {len(equipment_ids)} предметов", pack_id=pack.id)
