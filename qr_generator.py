@@ -19,85 +19,92 @@ def _build_pack_filename(equipment_numbers):
 
 
 def generate_qr_code_svg(data, filename, label_text=None):
-    """Генерирует чёрно-белый печатный код векторного формата с минималистичным обрамлением."""
+    """Генерирует чёрно-белый код в стиле макета с чёрным фоном и белой зоной кода."""
     qr = qrcode.QRCode(
         version=1,
         error_correction=qrcode.constants.ERROR_CORRECT_M,
         box_size=10,
-        border=4,
+        border=2,
     )
     qr.add_data(data)
     qr.make(fit=True)
 
+    def _fit_font_size(text_value, max_width, min_size=10, max_size=16, glyph_ratio=0.6):
+        """Подбирает размер шрифта так, чтобы строка помещалась по ширине."""
+        if not text_value:
+            return max_size
+
+        estimated = int(max_width / max(len(text_value) * glyph_ratio, 1))
+        return max(min_size, min(max_size, estimated))
+
     matrix = qr.get_matrix()
     module_size = 10
-    border_thickness = 16
-    qr_padding = 24
     qr_side = len(matrix) * module_size
     brand_text = (getattr(Config, 'QR_BRAND_TEXT', '') or '').strip()
-    brand_block_height = 30 if brand_text else 0
-    brand_gap = 10 if brand_text else 0
-    top_extra_height = brand_block_height + brand_gap
-    label_block_height = 64 if label_text else 0
 
-    inner_width = qr_side + (qr_padding * 2)
-    inner_height = qr_side + (qr_padding * 2) + label_block_height + top_extra_height
-    width = inner_width + (border_thickness * 2)
-    height = inner_height + (border_thickness * 2)
-    qr_origin_x = border_thickness + qr_padding
-    qr_origin_y = border_thickness + qr_padding + top_extra_height
+    panel_padding = 8
+    outer_margin_x = 20
+    panel_side = qr_side + (panel_padding * 2)
+    width = panel_side + (outer_margin_x * 2)
+
+    brand_font_size = _fit_font_size(
+        brand_text,
+        panel_side - 16,
+        min_size=12,
+        max_size=24,
+        glyph_ratio=0.56
+    ) if brand_text else 0
+    label_font_size = _fit_font_size(
+        str(label_text),
+        panel_side - 10,
+        min_size=22,
+        max_size=56,
+        glyph_ratio=0.62
+    ) if label_text else 0
+
+    top_band_height = (brand_font_size + 14) if brand_text else 12
+    bottom_band_height = (label_font_size + 16) if label_text else 12
+    height = top_band_height + panel_side + bottom_band_height
+
+    panel_x = outer_margin_x
+    panel_y = top_band_height
+    panel_center_x = panel_x + (panel_side / 2)
+    qr_origin_x = panel_x + panel_padding
+    qr_origin_y = panel_y + panel_padding
 
     svg_parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}">',
-        f'<rect x="0" y="0" width="{width}" height="{height}" fill="white"/>',
         f'<rect x="0" y="0" width="{width}" height="{height}" fill="black"/>',
-        (
-            f'<rect x="{border_thickness}" y="{border_thickness}" '
-            f'width="{inner_width}" height="{inner_height}" fill="white"/>'
-        ),
+        f'<rect x="{panel_x}" y="{panel_y}" width="{panel_side}" height="{panel_side}" fill="white"/>',
     ]
 
     for row_index, row in enumerate(matrix):
         for column_index, is_filled in enumerate(row):
             if not is_filled:
                 continue
-            x = qr_origin_x + column_index * module_size
-            y = qr_origin_y + row_index * module_size
+            x = qr_origin_x + (column_index * module_size)
+            y = qr_origin_y + (row_index * module_size)
             svg_parts.append(
                 f'<rect x="{x}" y="{y}" width="{module_size}" height="{module_size}" fill="black"/>'
             )
 
     if brand_text:
-        brand_top = border_thickness + qr_padding
-        brand_baseline_y = brand_top + brand_block_height - 8
-        divider_y = brand_top + brand_block_height + (brand_gap / 2)
+        brand_baseline_y = top_band_height - 7
         svg_parts.append(
-            f'<text x="{width / 2}" y="{brand_baseline_y}" text-anchor="middle" '
-            'font-size="16" font-family="Arial, sans-serif" font-weight="700" letter-spacing="0.6" fill="black">'
+            f'<text x="{panel_center_x}" y="{brand_baseline_y}" text-anchor="middle" '
+            f'font-size="{brand_font_size}" '
+            'font-family="Arial, sans-serif" font-weight="400" letter-spacing="0.2" fill="white">'
             f'{escape(brand_text)}'
             '</text>'
         )
-        svg_parts.append(
-            f'<rect x="{border_thickness + 16}" y="{divider_y}" '
-            f'width="{inner_width - 32}" height="2" fill="black"/>'
-        )
 
     if label_text:
-        separator_y = qr_origin_y + qr_side + qr_padding
-        label_box_width = min(inner_width - 32, max(170, len(label_text) * 16))
-        label_box_height = 34
-        label_box_x = (width - label_box_width) / 2
-        label_box_y = separator_y + 14
-
+        label_baseline_y = panel_y + panel_side + label_font_size + 4
         svg_parts.append(
-            f'<rect x="{label_box_x}" y="{label_box_y}" '
-            f'width="{label_box_width}" height="{label_box_height}" '
-            'fill="white" stroke="black" stroke-width="3" rx="4" ry="4"/>'
-        )
-        svg_parts.append(
-            f'<text x="{width / 2}" y="{label_box_y + 23}" text-anchor="middle" '
-            'font-size="20" font-family="Arial, sans-serif" font-weight="700" letter-spacing="1" fill="black">'
+            f'<text x="{panel_center_x}" y="{label_baseline_y}" text-anchor="middle" '
+            f'font-size="{label_font_size}" '
+            'font-family="Arial, sans-serif" font-weight="700" letter-spacing="0.4" fill="white">'
             f'{escape(label_text)}'
             '</text>'
         )
