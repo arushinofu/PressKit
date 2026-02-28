@@ -34,14 +34,18 @@ def generate_qr_code_svg(data, filename, label_text=None):
     border_thickness = 16
     qr_padding = 24
     qr_side = len(matrix) * module_size
+    brand_text = (getattr(Config, 'QR_BRAND_TEXT', '') or '').strip()
+    brand_block_height = 30 if brand_text else 0
+    brand_gap = 10 if brand_text else 0
+    top_extra_height = brand_block_height + brand_gap
     label_block_height = 64 if label_text else 0
 
     inner_width = qr_side + (qr_padding * 2)
-    inner_height = qr_side + (qr_padding * 2) + label_block_height
+    inner_height = qr_side + (qr_padding * 2) + label_block_height + top_extra_height
     width = inner_width + (border_thickness * 2)
     height = inner_height + (border_thickness * 2)
     qr_origin_x = border_thickness + qr_padding
-    qr_origin_y = border_thickness + qr_padding
+    qr_origin_y = border_thickness + qr_padding + top_extra_height
 
     svg_parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
@@ -64,8 +68,23 @@ def generate_qr_code_svg(data, filename, label_text=None):
                 f'<rect x="{x}" y="{y}" width="{module_size}" height="{module_size}" fill="black"/>'
             )
 
+    if brand_text:
+        brand_top = border_thickness + qr_padding
+        brand_baseline_y = brand_top + brand_block_height - 8
+        divider_y = brand_top + brand_block_height + (brand_gap / 2)
+        svg_parts.append(
+            f'<text x="{width / 2}" y="{brand_baseline_y}" text-anchor="middle" '
+            'font-size="16" font-family="Arial, sans-serif" font-weight="700" letter-spacing="0.6" fill="black">'
+            f'{escape(brand_text)}'
+            '</text>'
+        )
+        svg_parts.append(
+            f'<rect x="{border_thickness + 16}" y="{divider_y}" '
+            f'width="{inner_width - 32}" height="2" fill="black"/>'
+        )
+
     if label_text:
-        separator_y = border_thickness + (qr_padding * 2) + qr_side
+        separator_y = qr_origin_y + qr_side + qr_padding
         label_box_width = min(inner_width - 32, max(170, len(label_text) * 16))
         label_box_height = 34
         label_box_x = (width - label_box_width) / 2

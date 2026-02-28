@@ -33,6 +33,9 @@ class Config:
     # Бэкапы
     BACKUP_INTERVAL_HOURS = 24
 
+    # Подпись на кодах
+    QR_BRAND_TEXT = 'Пресс-центр ИТТСУ'
+
 
 # Создание необходимых директорий
 os.makedirs(Config.QR_CODES_FOLDER, exist_ok=True)
