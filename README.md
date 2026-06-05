@@ -1,6 +1,6 @@
 # 📦 PressKit
 
-[![Status](https://img.shields.io/badge/статус-Продакшн-purple)](https://github.com/topics/arh-production)
+[![Status](https://img.shields.io/badge/статус-архив-black)](https://github.com/topics/arh-production)
 [![License](https://img.shields.io/badge/лицензия-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/версия-1.0.2-yellow.svg)](https://github.com/arushinofu/presskit/releases)
 [![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white&style=flat)](https://www.python.org/)
